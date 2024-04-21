@@ -2355,6 +2355,7 @@ dberr_t srv_start(bool create_new_db) {
 
 files_checked:
 
+  /* 假如打开了 double-write buffer, 需要进行初始化. */
   if (dblwr::enabled && ((err = dblwr::open(create_new_db)) != DB_SUCCESS)) {
     return (srv_init_abort(err));
   }
@@ -2442,6 +2443,8 @@ files_checked:
     }
 
   } else {
+    /* IF NOT create_new_db. */
+
     /* Load the reserved boundaries of the legacy dblwr buffer, this is
     requird to check for stray reads and writes trying to access this
     reserved region in the sys tablespace.
@@ -2462,6 +2465,7 @@ files_checked:
     /* We always try to do a recovery, even if the database had
     been shut down normally: this is the normal startup path */
 
+    /* InnoDB 开始 recover. */
     err = recv_recovery_from_checkpoint_start(*log_sys, flushed_lsn);
 
     if (err == DB_SUCCESS) {
@@ -2989,6 +2993,7 @@ void srv_start_threads(bool bootstrap) {
       trx_sys_need_rollback()) {
     /* Rollback all recovered transactions that are
     not in committed nor in XA PREPARE state. */
+    /* 启动事务回滚线程. */
     srv_threads.m_trx_recovery_rollback = os_thread_create(
         trx_recovery_rollback_thread_key, trx_recovery_rollback_thread);
 

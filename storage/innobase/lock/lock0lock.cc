@@ -1131,6 +1131,7 @@ void RecLock::lock_add(lock_t *lock) {
 
   lock->index->table->n_rec_locks.fetch_add(1, std::memory_order_relaxed);
 
+  /* 已经获取的 lock 放在队列头部, 等待的 lock 在队尾. */
   if (!wait) {
     lock_rec_insert_to_granted(lock_hash, lock, m_rec_id);
   } else {
@@ -1303,6 +1304,7 @@ dberr_t RecLock::add_to_waitq(const lock_t *wait_for, const lock_prdt_t *prdt) {
   /* Don't queue the lock to hash table, if high priority transaction. */
   lock_t *lock = create(m_trx, prdt);
 
+  /* 构造等待关系. */
   lock_create_wait_for_edge(m_trx, wait_for->trx);
 
   ut_ad(lock_get_wait(lock));
@@ -1520,6 +1522,7 @@ lock_rec_req_status lock_rec_lock_fast(
 
   if (lock == nullptr) {
     if (!impl) {
+      /* 假如不是隐式锁. */
       RecLock rec_lock(index, block, heap_no, mode);
 
       trx_mutex_enter(trx);
@@ -1534,12 +1537,19 @@ lock_rec_req_status lock_rec_lock_fast(
     if (lock_rec_get_next_on_page(lock) != nullptr || lock->trx != trx ||
         lock->type_mode != (mode | LOCK_REC) ||
         lock_rec_get_n_bits(lock) <= heap_no) {
+      /* 1. 确保只有一个事务锁 lock_rec_get_next_on_page(lock) != nullptr.
+       * 2. 确保该事务锁与申请的事务是同一个.
+       * 3. 确保该事务锁类型
+       * 4. 并且该事务锁的 bitmap 能够记录当前的 heap no.
+       * 5. 否则申请锁失败. */
       status = LOCK_REC_FAIL;
     } else if (!impl) {
       /* If the nth bit of the record lock is already set
       then we do not set a new lock bit, otherwise we do
       set */
       if (!lock_rec_get_nth_bit(lock, heap_no)) {
+        /* 设置 lock 的 bitmap 的 heap no, 所以事务的一个 lock 可以记录单个 page 上的
+         * 多个 record. */
         lock_rec_set_nth_bit(lock, heap_no);
         status = LOCK_REC_SUCCESS_CREATED;
       }
@@ -1738,6 +1748,7 @@ static dberr_t lock_rec_lock(bool impl, select_mode sel_mode, ulint mode,
   ut_ad(!impl || ((mode & LOCK_REC_NOT_GAP) == LOCK_REC_NOT_GAP));
   /* We try a simplified and faster subroutine for the most
   common cases */
+  /* 尝试申请 record lock. */
   switch (lock_rec_lock_fast(impl, mode, block, heap_no, index, thr)) {
     case LOCK_REC_SUCCESS:
       return (DB_SUCCESS);
@@ -2043,6 +2054,7 @@ static void lock_rec_grant_by_heap_no(lock_t *in_lock, ulint heap_no) {
 #ifdef UNIV_DEBUG
   bool seen_waiting_lock = false;
 #endif
+  /* 迭代 hash table 中的 lock. */
   Lock_iter::for_each(
       rec_id,
       [&](lock_t *lock) {
@@ -2068,12 +2080,14 @@ static void lock_rec_grant_by_heap_no(lock_t *in_lock, ulint heap_no) {
         each write to blocking_trx is done while holding the latch. So, even
         though we use memory_order_relaxed we will see modifications performed
         before we acquired the latch. */
+        /* 获取等待队列的 lock 的阻塞事务. */
         const auto blocking_trx =
             trx->lock.blocking_trx.load(std::memory_order_relaxed);
         /* No one should be WAITING without good reason! */
         ut_ad(blocking_trx);
         /* We will only consider granting the `lock`, if we are the reason it
         was waiting. */
+        /* 该 lock 的阻塞事务与待释放锁的事务不同则返回. */
         if (blocking_trx != in_trx) {
           return (true);
         }
@@ -2088,12 +2102,16 @@ static void lock_rec_grant_by_heap_no(lock_t *in_lock, ulint heap_no) {
         have to take a snapshot of all schedule_weight atomics, so they don't
         change during call to stable_sort in a way which causes the algorithm to
         crash. */
+        /* 获取事务的权重. */
         const auto schedule_weight =
             trx->lock.schedule_weight.load(std::memory_order_relaxed);
         if (schedule_weight <= 1) {
+          /* 小于等于1, 即插入低优先级队列,
+           * lock.schedule_weight 初始值是 0. */
           low_priority_light.push_back(lock);
           return (true);
         }
+        /* 否则插入 low_priority_heavier 队列. */
         low_priority_heavier.push_back(LockDescriptorEx{schedule_weight, lock});
 
         return (true);
@@ -2106,13 +2124,17 @@ static void lock_rec_grant_by_heap_no(lock_t *in_lock, ulint heap_no) {
     return;
   }
   /* We want high schedule weight to be in front, and break ties by position */
+  /* 根据事务的权重进行排序. */
   std::stable_sort(low_priority_heavier.begin(), low_priority_heavier.end(),
                    [](const LockDescriptorEx &a, const LockDescriptorEx &b) {
                      return (a.first > b.first);
                    });
+  /* waiting 的队头是高优先级事务. */
+  /* 再插入权重非 1 的事务. */
   for (const auto &descriptor : low_priority_heavier) {
     waiting.push_back(descriptor.second);
   }
+  /* 最后插入权重为 1 的事务. */
   waiting.insert(waiting.end(), low_priority_light.begin(),
                  low_priority_light.end());
 
@@ -2121,6 +2143,7 @@ static void lock_rec_grant_by_heap_no(lock_t *in_lock, ulint heap_no) {
 
   granted.reserve(granted.size() + waiting.size());
 
+  /* wait 根据上述的原则收集了等待事务, 进行迭代. */
   for (lock_t *wait_lock : waiting) {
     /* Check if the transactions in the waiting queue have
     to wait for locks granted above. If they don't have to
@@ -2134,12 +2157,14 @@ static void lock_rec_grant_by_heap_no(lock_t *in_lock, ulint heap_no) {
     const lock_t *blocking_lock =
         lock_rec_has_to_wait_for_granted(wait_lock, granted, new_granted_index);
     if (blocking_lock == nullptr) {
+      /* 假如等待事务还在等待中, 授予 lock. */
       lock_grant(wait_lock);
 
       lock_rec_move_granted_to_front(wait_lock, rec_id);
 
       granted.push_back(wait_lock);
     } else {
+      /* 更新等待关系. */
       lock_update_wait_for_edge(wait_lock, blocking_lock);
     }
   }
@@ -2202,9 +2227,11 @@ static void lock_rec_grant(lock_t *in_lock) {
   there are at least two waiters to arbitrate among, but in practice the current
   simple heuristic is good enough. */
   bool found_waiter = false;
+  /* 查找当前等待的 lock. */
   for (auto lock = lock_rec_get_first_on_page_addr(lock_hash, page_id);
        lock != nullptr; lock = lock_rec_get_next_on_page(lock)) {
     if (lock->is_waiting()) {
+      /* 查找成功. */
       found_waiter = true;
       break;
     }
@@ -2213,6 +2240,7 @@ static void lock_rec_grant(lock_t *in_lock) {
     mon_type_t grant_attempts = 0;
     for (ulint heap_no = 0; heap_no < lock_rec_get_n_bits(in_lock); ++heap_no) {
       if (lock_rec_get_nth_bit(in_lock, heap_no)) {
+        /* 假如第 heap_no 位记录的 lock 信息, 则选择等待事务进行锁的 grant. */
         lock_rec_grant_by_heap_no(in_lock, heap_no);
         ++grant_attempts;
       }
@@ -2231,7 +2259,9 @@ to a lock. NOTE: all record locks contained in in_lock are removed.
                                 lock requests granted, if they are now
                                 qualified to it */
 static void lock_rec_dequeue_from_page(lock_t *in_lock) {
+  /* 移除记录锁. */
   lock_rec_discard(in_lock);
+  /* 授予等待的事务记录锁. */
   lock_rec_grant(in_lock);
 }
 
@@ -2255,6 +2285,7 @@ void lock_rec_discard(lock_t *in_lock) {
 
   locksys::remove_from_trx_locks(in_lock);
 
+  /* 从 hash 列表移除 lock. */
   HASH_DELETE(lock_t, hash, lock_hash_get(in_lock->type_mode),
               lock_rec_fold(page_id), in_lock);
 
@@ -4164,6 +4195,7 @@ static void lock_release(trx_t *trx) {
   */
   trx_mutex_enter(trx);
 
+  /* 释放事务锁: trx->lock.trx_locks 记录当前事务所有持有的 lock. */
   ut_ad(trx->lock.wait_lock == nullptr);
   while ((lock = UT_LIST_GET_LAST(trx->lock.trx_locks)) != nullptr) {
     /* Following call temporarily releases trx->mutex */

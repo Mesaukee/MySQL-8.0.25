@@ -1,3 +1,8 @@
+
+> 基于 MySQL 8.0.25 (InnoDB) 源码中文注释版本.
+>
+> 对于中文注释部分的问题与讨论可以直接在对应的代码行上通过 Reference in new issue 发起.
+
 Copyright (c) 2000, 2021, Oracle and/or its affiliates.
 
 This is a release of MySQL, an SQL database server.

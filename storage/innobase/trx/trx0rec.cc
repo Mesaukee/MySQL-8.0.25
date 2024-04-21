@@ -1434,6 +1434,7 @@ static ulint trx_undo_page_report_modify(
         /* Notify purge that it eventually has to
         free the old externally stored field */
 
+        /* 对于 update 操作, 都需要设置 del_marks = TRUE. */
         undo_ptr->update_undo->del_marks = TRUE;
 
         *type_cmpl_ptr |= TRX_UNDO_UPD_EXTERN;
@@ -2217,6 +2218,7 @@ dberr_t trx_undo_report_row_operation(
       undo = undo_ptr->insert_undo;
 
       if (undo == nullptr) {
+        /* 为 insert 操作分配 undo log segment. */
         err = trx_undo_assign_undo(trx, undo_ptr, TRX_UNDO_INSERT);
         undo = undo_ptr->insert_undo;
 
@@ -2235,6 +2237,7 @@ dberr_t trx_undo_report_row_operation(
       undo = undo_ptr->update_undo;
 
       if (undo == nullptr) {
+        /* 为 update 操作分配 undo log segment. */
         err = trx_undo_assign_undo(trx, undo_ptr, TRX_UNDO_UPDATE);
         undo = undo_ptr->update_undo;
 
@@ -2318,6 +2321,7 @@ dberr_t trx_undo_report_row_operation(
       mtr_commit(&mtr);
 
       undo->empty = FALSE;
+      /* undo->top_page_no 记录最新的 undo record 的 page no. */
       undo->top_page_no = page_no;
       undo->top_offset = offset;
       undo->top_undo_no = trx->undo_no;
@@ -2327,6 +2331,8 @@ dberr_t trx_undo_report_row_operation(
 
       mutex_exit(&trx->undo_mutex);
 
+      /* roll_ptr 包含的信息有 is_insert/undo log 的 space_id/ undo log 的 page_no/offset.
+       * offset 是 undo record 写在 undo page 的偏移. */
       *roll_ptr =
           trx_undo_build_roll_ptr(op_type == TRX_UNDO_INSERT_OP,
                                   undo_ptr->rseg->space_id, page_no, offset);
@@ -2350,6 +2356,7 @@ dberr_t trx_undo_report_row_operation(
     counterpart of the tree latch, which is the rseg mutex. */
 
     undo_ptr->rseg->latch();
+    /* 新申请一个 undo page. */
     undo_block = trx_undo_add_page(trx, undo, undo_ptr, &mtr);
     undo_ptr->rseg->unlatch();
 

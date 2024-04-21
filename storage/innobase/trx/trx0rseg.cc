@@ -223,6 +223,7 @@ trx_rseg_t *trx_rseg_mem_create(ulint id, space_id_t space_id,
                                 mtr_t *mtr) {
   auto rseg = static_cast<trx_rseg_t *>(ut_zalloc_nokey(sizeof(trx_rseg_t)));
 
+  /* 初始化回滚段的部分信息. */
   rseg->id = id;
   rseg->space_id = space_id;
   rseg->page_size.copy_from(page_size);
@@ -242,6 +243,7 @@ trx_rseg_t *trx_rseg_mem_create(ulint id, space_id_t space_id,
   UT_LIST_INIT(rseg->insert_undo_list, &trx_undo_t::undo_list);
   UT_LIST_INIT(rseg->insert_undo_cached, &trx_undo_t::undo_list);
 
+  /* 获取回滚段的 header. */
   auto rseg_header = trx_rsegf_get_new(space_id, page_no, page_size, mtr);
 
   rseg->max_size =
@@ -316,8 +318,10 @@ page_no_t trx_rseg_get_page_no(space_id_t space_id, ulint rseg_id) {
   mtr_t mtr;
   mtr.start();
 
+  /* 获取回滚段 directory header. */
   trx_rsegsf_t *rsegs_header = trx_rsegsf_get(space_id, &mtr);
 
+  /* 获取第 rseg_id 个回滚段的 header page. */
   page_no_t page_no = trx_rsegsf_get_page_no(rsegs_header, rseg_id, &mtr);
 
   mtr.commit();
@@ -570,6 +574,7 @@ bool trx_rseg_add_rollback_segments(space_id_t space_id, ulong target_rsegs,
     /* Look in the tablespace to discover if the rollback segment
     already exists. */
     if (type == UNDO) {
+      /* 获取第 rseg_id 个回滚段的 header page. */
       page_no = trx_rseg_get_page_no(space_id, rseg_id);
 
     } else {
@@ -613,6 +618,7 @@ bool trx_rseg_add_rollback_segments(space_id_t space_id, ulong target_rsegs,
       mtr_set_log_mode(&mtr, MTR_LOG_NO_REDO);
     }
 
+    /* 创建回滚段的内存结构, rseg_id: 回滚段的 ID, page_no: 回滚段的 header page id. */
     rseg = trx_rseg_mem_create(rseg_id, space_id, page_no, univ_page_size, 0,
                                purge_sys->purge_queue, &mtr);
 

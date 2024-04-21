@@ -1488,6 +1488,7 @@ static inline size_t compute_how_much_to_write(const log_t &log,
   loop of the log writer thread. Then, the log writer will update
   maximum lsn up to which, it has data ready in the log buffer,
   and request next write operation according to its strategy. */
+  /* 首先判断当前的 redo log 文件是否有满足的写入空间. */
   if (!current_file_has_space(log, real_offset, buffer_size)) {
     /* The end of write would not fit the current log file. */
 
@@ -1495,6 +1496,7 @@ static inline size_t compute_how_much_to_write(const log_t &log,
     at the first byte of the next file. */
     ut_a(current_file_has_space(log, real_offset, 0));
 
+    /* 假如已经写满，返回 0 即开启下一个 redo log 文件. */
     if (!current_file_has_space(log, real_offset, 1)) {
       /* The beginning of write is at the first byte
       of the next log file. Flush header of the next
@@ -1511,6 +1513,8 @@ static inline size_t compute_how_much_to_write(const log_t &log,
       /* If the condition for real_offset + buffer_size holds,
       then the expression below is < buffer_size, which is
       size_t, so the typecast is ok. */
+      /* 虽然不满足将本次 redo log 完全写下去，但依然将 redo log
+       * 文件的剩余空间写满. */
       write_size =
           static_cast<size_t>(log.current_file_end_offset - real_offset);
 
@@ -1519,6 +1523,7 @@ static inline size_t compute_how_much_to_write(const log_t &log,
     }
 
   } else {
+    /* redo log 文件的空间完全满足写入此次 redo log. */
     write_size = buffer_size;
 
     ut_a(write_size % OS_FILE_LOG_BLOCK_SIZE >= LOG_BLOCK_HDR_SIZE ||
@@ -1542,6 +1547,8 @@ static inline size_t compute_how_much_to_write(const log_t &log,
   Still we might decide not to write from the log buffer,
   because write-ahead is needed. In such case we could write
   together with the last incomplete block after copying. */
+  /* 判断是否允许直接从 redo log buffer 写入, 否则需要使用 write-ahead
+   * buffer, 对于写入大小超过 512 字节的 redo log 直接从 log buffer 写入. */
   write_from_log_buffer = write_size >= OS_FILE_LOG_BLOCK_SIZE;
 
   if (write_from_log_buffer) {
@@ -1552,13 +1559,26 @@ static inline size_t compute_how_much_to_write(const log_t &log,
 
   /* Check how much we have written ahead to avoid read-on-write. */
 
+  /* 判断 write_ahead buffer 是否满足本次写入 write_size 大小的 redo log. */
   if (!current_write_ahead_enough(log, real_offset, write_size)) {
+    /* 对于 write_ahead buffer 不满足完整写入本次 redo log 的情况. */
     if (!current_write_ahead_enough(log, real_offset, 1)) {
+      /* 假如 write_ahead buffer 已经被完全写满. */
       /* Current write-ahead region has no space at all. */
 
+      /* 下一个 write_ahead buffer 的起始位置. */
       const auto next_wa = compute_next_write_ahead_end(real_offset);
 
+			/* Note. 这里有一个隐藏的假设：
+       * a. 当某次写 IO 的目的偏移地址是与 log_sys->write_ahead_buf 当前覆盖范围
+       * 的结束地址对齐时，则假定该次写 IO 目标区域在内存没有对应的 Page Cache，需
+       * 要重新执行一次 write ahead 操作.
+       *
+       * b. 当执行一次 write ahead 逻辑后，在接下来的一段时间内，该区域对应的 Page
+       * Cache 会保存在内存中，后续对当前 write_ahead buffer 可以覆盖的文件区域的
+       * 写 IO，都可以命中这些 Page Cache, 从而避免额外的读 IO 开销. */
       if (!write_ahead_enough(next_wa, real_offset, write_size)) {
+        /* 新开的 write_ahead buffer 仍然不满足完整写入本次 redo log. */
         /* ... and also the next write-ahead is too small.
         Therefore we have more data to write than size of
         the write-ahead. We write from the log buffer,
@@ -1567,6 +1587,7 @@ static inline size_t compute_how_much_to_write(const log_t &log,
 
         ut_a(write_from_log_buffer);
 
+        /* 计算写入大小. */
         write_size = next_wa - real_offset;
 
         ut_a((real_offset + write_size) % srv_log_write_ahead_size == 0);
@@ -1577,12 +1598,14 @@ static inline size_t compute_how_much_to_write(const log_t &log,
         /* We copy data to write_ahead buffer,
         and write from there doing write-ahead
         of the bigger region in the same time. */
+        /* 重新开启的 write_ahead buffer 满足本次 redo log 的完整写入. */
         write_from_log_buffer = false;
       }
 
     } else {
       /* We limit write up to the end of region
       we have written ahead already. */
+      /* 计算本次写入的基于 write_ahead buffer 能写入的最大字节数. */
       write_size =
           static_cast<size_t>(log.write_ahead_end_offset - real_offset);
 
@@ -1592,10 +1615,25 @@ static inline size_t compute_how_much_to_write(const log_t &log,
 
   } else {
     if (write_from_log_buffer) {
+      /* 512 字节向下取整对齐写入. */
+      /* 这个路径代表当前的 write_ahead buffer 已经能 cover 此次写入, 所以直接
+       * 512 字节对齐写入(写入对应的 Page 已经存在 Page Cache 中). */
       write_size = ut_uint64_align_down(write_size, OS_FILE_LOG_BLOCK_SIZE);
     }
   }
 
+  /* 总结写 redo log 的各种情况:
+   * 1. 对于写入 redo log 小于 OS_FILE_LOG_BLOCK_SIZE 的情况, 并且满足 write_ahead
+   * buffer 的写入(无论是当前的 write_ahead 还是下次重新开辟 write_ahead buffer 的
+   * 写入, 都通过 log_buffer->write_ahead buffer 的方式写入.
+   *
+   * 2. 对于写入 redo log 大于 OS_FILE_LOG_BLOCK_SIZE 的情况, 并且满足 write_ahead
+   * buffer 的写入(无论是当前的 write_ahead 还是下次重新开辟 write_ahead buffer 的
+   * 写入, 都通过 log_buffer->write_ahead buffer 的方式写入.
+   *
+   * 3. 对于写入 redo log 大于 OS_FILE_LOG_BLOCK_SIZE 的情况，但是不满足 write_ahead
+   * buffer 的写入(无论是当前的 write_ahead buffer 还是下次重新开辟 write_ahead buffer
+   * 的写入), 需要通过 log_buffer 直接写入的方式完成. */
   return (write_size);
 }
 
@@ -1651,6 +1689,7 @@ static inline void write_blocks(log_t &log, byte *write_buf, size_t write_size,
   ut_a(real_offset + write_size <= log.write_ahead_end_offset ||
        (real_offset + write_size) % srv_log_write_ahead_size == 0);
 
+  /* 进行 redo log 的文件写入. */
   auto err = fil_redo_io(
       IORequestLogWrite, page_id_t{log.files_space_id, page_no}, univ_page_size,
       static_cast<ulint>(real_offset % UNIV_PAGE_SIZE), write_size, write_buf);
@@ -1752,6 +1791,7 @@ static inline size_t prepare_for_write_ahead(log_t &log, uint64_t real_offset,
 
   ut_a(real_offset + write_size <= next_wa);
 
+  /* 新开辟的 write_ahead, 第一次写入后续的空洞需要以 0x00 填充. */
   size_t write_ahead =
       static_cast<size_t>(next_wa - (real_offset + write_size));
 
@@ -1805,14 +1845,17 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
 
   checkpoint_no_t checkpoint_no = log.next_checkpoint_no.load();
 
+  /* 计算 start_lsn 对应在 redo log 文件的 offset. */
   const auto real_offset = compute_real_offset(log, start_lsn);
 
   bool write_from_log_buffer;
 
+  /* 计算此次写入的 redo log 大小. */
   auto write_size = compute_how_much_to_write(log, real_offset, buffer_size,
                                               write_from_log_buffer);
 
   if (write_size == 0) {
+    /* 上一个 redo log 文件写满了，开启下一个文件. */
     start_next_file(log, start_lsn);
     return;
   }
@@ -1859,6 +1902,8 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
                                checkpoint_no);
 
     if (!current_write_ahead_enough(log, real_offset, 1)) {
+      /* 对于新开辟的 write_ahead buffer, 第一次写入需要完整的写入整个
+       * write_ahead buffer. */
       written_ahead = prepare_for_write_ahead(log, real_offset, write_size);
     }
   }
@@ -1867,6 +1912,7 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
 
   /* Now, we know, that we are going to write completed
   blocks only (originally or copied and completed). */
+  /* 进行 redo log 的文件写入. */
   write_blocks(log, write_buf, write_size, real_offset);
 
   LOG_SYNC_POINT("log_writer_before_lsn_update");
@@ -1876,6 +1922,7 @@ static void log_files_write_buffer(log_t &log, byte *buffer, size_t buffer_size,
   const lsn_t new_write_lsn = start_lsn + lsn_advance;
   ut_a(new_write_lsn > log.write_lsn.load());
 
+  /* 更新 log.write_lsn. */
   log.write_lsn.store(new_write_lsn);
 
   notify_about_advanced_write_lsn(log, old_write_lsn, new_write_lsn);
@@ -2079,13 +2126,19 @@ static void log_writer_write_buffer(log_t &log, lsn_t next_write_lsn) {
   ut_a(next_write_lsn - last_write_lsn <= log.buf_size);
   ut_a(next_write_lsn > last_write_lsn);
 
+  /* 此次写入 log buffer 开始的 offset, start_offset. */
   size_t start_offset = last_write_lsn % log.buf_size;
   size_t end_offset = next_write_lsn % log.buf_size;
 
+  /* 假如写入存在回环的情况. */
   if (start_offset >= end_offset) {
+    /* 为什么不允许回环? 下面写入函数 log_files_write_buffer() 只传递了
+     * 一个 buffer 的起始地址, 所以对于回环的情况无法处理. */
     ut_a(next_write_lsn - last_write_lsn >= log.buf_size - start_offset);
 
+    /* 此次写入 log buffer 结束的 offset 就是 log buffe 的长度, 即尾部. */
     end_offset = log.buf_size;
+    /* 此次写入的 lsn 是 last_write_lsn + 长度. */
     next_write_lsn = last_write_lsn + (end_offset - start_offset);
   }
   ut_a(start_offset < end_offset);
@@ -2129,8 +2182,10 @@ static void log_writer_write_buffer(log_t &log, lsn_t next_write_lsn) {
              ("write " LSN_PF " to " LSN_PF, last_write_lsn, next_write_lsn));
 
   byte *buf_begin =
+      /* 以 start_offset 向下取整, log buffer 写入的起始位置. */
       log.buf + ut_uint64_align_down(start_offset, OS_FILE_LOG_BLOCK_SIZE);
 
+  /* log buffer 写入的结束位置. */
   byte *buf_end = log.buf + end_offset;
 
   /* Do the write to the log files */

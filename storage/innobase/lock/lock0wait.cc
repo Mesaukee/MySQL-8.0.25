@@ -583,6 +583,7 @@ static uint64_t lock_wait_snapshot_waiting_threads(
       auto from = thr_get_trx(slot->thr);
       auto to = from->lock.blocking_trx.load();
       if (to != nullptr) {
+        /* 保存事务的等待关系. */
         infos.push_back({from, to, slot, slot->reservation_no});
       }
     }
@@ -591,6 +592,7 @@ static uint64_t lock_wait_snapshot_waiting_threads(
   return table_reservations;
 }
 
+/* 初始化权重. */
 /** Used to initialize schedule weights of nodes in wait-for-graph for the
 computation. Initially all nodes have weight 1, except for nodes which waited
 very long, for which we set the weight to WEIGHT_BOOST
@@ -622,12 +624,20 @@ static void lock_wait_compute_initial_weights(
   small enough to fit in signed 32-bit.
   We thus clamp WEIGHT_BOOST to 1e9 / n just to be safe.
   */
+  /* WEIGHT_BOOST  设置成等待事务的数量或者 1e9. */
   const trx_schedule_weight_t WEIGHT_BOOST =
       n == 0 ? 1 : std::min<trx_schedule_weight_t>(n, 1e9 / n);
   new_weights.clear();
+  /* 默认权重值为 1. */
   new_weights.resize(n, 1);
+  /* MAX_FAIR_WAIT 是两倍的等待事务数量. */
   const uint64_t MAX_FAIR_WAIT = 2 * n;
   for (size_t from = 0; from < n; ++from) {
+    /* reservation_no 是事务进入等待状态时的 lock_wait_table_reservations 的值,
+     * table_reservations 是开始进行快照时 lock_wait_table_reservations 的值,
+     * 所以假如 infos[from].reservation_no + MAX_FAIR_WAIT 小于 table_reservations
+     * 的情况出现就代表事务 "from" 等待的时间较长, 为了防止饿死, 所以将其权重置为
+     * 两倍的等待事务数量(n). */
     if (infos[from].reservation_no + MAX_FAIR_WAIT < table_reservations) {
       new_weights[from] = WEIGHT_BOOST;
     }
@@ -646,9 +656,11 @@ static void lock_wait_build_wait_for_graph(
     ut::vector<waiting_trx_info_t> &infos, ut::vector<int> &outgoing) {
   /** We are going to use int and uint to store positions within infos */
   ut_ad(infos.size() < std::numeric_limits<uint>::max());
+  /* n 代表当前所有等待锁的事务数量. */
   const auto n = static_cast<uint>(infos.size());
   ut_ad(n < static_cast<uint>(std::numeric_limits<int>::max()));
   outgoing.clear();
+  /* outgoing 的默认值是 -1. */
   outgoing.resize(n, -1);
   /* This particular implementation sorts infos by ::trx, and then uses
   lower_bound to find index in infos corresponding to ::wait_for, which has
@@ -663,6 +675,8 @@ static void lock_wait_build_wait_for_graph(
   with open addressing and double hashing with a statically allocated
   2 * srv_max_n_threads buckets. This however did not increase transactions per
   second, so introducing a custom implementation seems unjustified here. */
+
+  /* 根据 trx 指针的地址排序. */
   sort(infos.begin(), infos.end());
   waiting_trx_info_t needle{};
   for (uint from = 0; from < n; ++from) {
@@ -670,6 +684,7 @@ static void lock_wait_build_wait_for_graph(
     trx field, as this is the only one we will initialize in the needle. */
     ut_ad(from == 0 ||
           std::less<trx_t *>{}(infos[from - 1].trx, infos[from].trx));
+    /* waits_for 是其等待的事务. */
     needle.trx = infos[from].waits_for;
     auto it = std::lower_bound(infos.begin(), infos.end(), needle);
 
@@ -678,6 +693,9 @@ static void lock_wait_build_wait_for_graph(
     }
     auto to = it - infos.begin();
     ut_ad(from != static_cast<uint>(to));
+    /* 构造事务的等待关系.
+     * to 代表 from 的等待事务是 infos 数组的第几个, -1 代表等待的事务
+     * 不存在于当前的等待关系图中. 即 from 等待的事务没有需要等待的锁. */
     outgoing[from] = static_cast<int>(to);
   }
 }
@@ -791,7 +809,9 @@ static ut::vector<trx_t *> lock_wait_order_for_choosing_victim(
 static void lock_wait_add_subtree_weight(
     ut::vector<trx_schedule_weight_t> &new_weights, const size_t parent_id,
     const size_t child_id) {
+  /* 当前事务的权重. */
   const trx_schedule_weight_t child_weight = new_weights[child_id];
+  /* 阻塞当前事务的事务的权重. */
   trx_schedule_weight_t &old_parent_weight = new_weights[parent_id];
   /* We expect incoming_weight to be positive
   @see lock_wait_compute_initial_weights() */
@@ -805,6 +825,7 @@ static void lock_wait_add_subtree_weight(
       "The trx_schedule_weight_t should be unsigned to minimize impact "
       "of overflows");
   ut_ad(old_parent_weight < old_parent_weight + child_weight);
+  /* 阻塞当前事务的事务权重增加, 增加为当前事务的权重. */
   old_parent_weight += child_weight;
 }
 
@@ -835,19 +856,36 @@ static void lock_wait_accumulate_weights(
   ut_a(incoming_count.size() == outgoing.size());
   ut::vector<size_t> ready;
   ready.clear();
+
+  /* incoming_count 数组的默认值是 0, 记录着该节点的入度,
+   * 即等待在该事务上的事务数量. */
   const size_t n = incoming_count.size();
   for (size_t id = 0; id < n; ++id) {
     if (!incoming_count[id]) {
+      /* 将没有阻塞其他事务插入 ready. */
       ready.push_back(id);
     }
   }
 
+  /* outgoing 记录的事务的等待关系.
+   * outgoing 的 value 代表是第 id 个事务等待的事务索引下标. */
   while (!ready.empty()) {
     size_t id = ready.back();
     ready.pop_back();
     if (outgoing[id] != -1) {
+      /* 所有等待的事务存在于当前的等待关系图中的事务都需要更新权重.
+       * 记: 这里更新的是等待事务的权重, 被阻塞的事务是否更新取决于它
+       * 是否阻塞了其他事务.
+       *
+       * 记: 等待关系图记录了所有被阻塞的事务, 不在等待关系图中事务无需
+       * 授予 lock.
+       *
+       * outgoing[id] 是其等待的事务索引下标, id 是自身的索引下标. */
       lock_wait_add_subtree_weight(new_weights, outgoing[id], id);
+      /* incoming_count 记录的是该节点的入度, 所以需要累加所有等待事务的权重. */
       if (!--incoming_count[outgoing[id]]) {
+        /* 等待事务(阻塞其他事务的事务)假如其入度更新权重完成, 也要将其插入 ready,
+         * 再计算阻塞它的其他事务权重. */
         ready.push_back(outgoing[id]);
       }
     }
@@ -890,6 +928,13 @@ static void lock_wait_publish_new_weights(
   const size_t n = infos.size();
   lock_wait_mutex_enter();
   for (size_t id = 0; id < n; ++id) {
+    /* 存在回环的事务, 比如 T1 等待 T2 的锁, T2 等待 T1 的锁, 直接跳过更新.
+     *
+     * 为什么 incoming_count 会保留回环的事务?
+     * lock_wait_accumulate_weights() 更新事务权重的时候会首先选择不阻塞其他事务的
+     * 事务更新其等待事务(阻塞其他事务的事务)的权重. 而 T1/T2 不满足上述的要求, 所以
+     * 这两个事务在 incoming_count 不会被修改. incoming_count 数组的默认值是 0, 记录
+     * 该节点的入度.*/
     if (is_on_cycle[id]) {
       continue;
     }
@@ -899,6 +944,7 @@ static void lock_wait_publish_new_weights(
     }
     ut_ad(thr_get_trx(slot->thr) == infos[id].trx);
     const auto schedule_weight = new_weights[id];
+    /* 更新事务权重. */
     infos[id].trx->lock.schedule_weight.store(schedule_weight,
                                               std::memory_order_relaxed);
   }
@@ -943,6 +989,8 @@ static trx_t *lock_wait_choose_victim(
       }
     }
 
+    /* 选择一个权重小的事务回滚:
+     * ((t)->undo_no + UT_LIST_GET_LEN((t)->lock.trx_locks)). */
     if (trx_weight_ge(chosen_victim, trx)) {
       /* The joining transaction is 'smaller',
       choose it as the victim and roll it back. */
@@ -1200,6 +1248,7 @@ static bool lock_wait_check_candidate_cycle(
   lock_reset_lock_and_trx_wait() resets trx->lock.wait_lock to NULL.
   Checking trx->lock.wait_lock in reliable way requires global exclusive latch.
   */
+  /* X 锁. */
   locksys::Global_exclusive_latch_guard gurad{UT_LOCATION_HERE};
   if (!lock_wait_trxs_are_still_waiting(cycle_ids, infos)) {
     lock_wait_mutex_exit();
@@ -1219,6 +1268,7 @@ static bool lock_wait_check_candidate_cycle(
 
   lock_wait_mutex_exit();
 
+  /* 选择一个回滚事务. */
   trx_t *const chosen_victim = lock_wait_choose_victim(cycle_ids, infos);
   ut_a(chosen_victim);
 
@@ -1267,14 +1317,28 @@ static void lock_wait_find_and_handle_deadlocks(
   ut_ad(infos.size() == outgoing.size());
   /** We are going to use int and uint to store positions within infos */
   ut_ad(infos.size() < std::numeric_limits<uint>::max());
+  /* n 代表当前所有等待锁的事务数量. */
   const auto n = static_cast<uint>(infos.size());
   ut_ad(n < static_cast<uint>(std::numeric_limits<int>::max()));
   ut::vector<uint> cycle_ids;
   cycle_ids.clear();
   ut::vector<uint> colors;
   colors.clear();
+  /* colors 默认值为 0. */
   colors.resize(n, 0);
   uint current_color = 0;
+  /* 如何检测死锁?
+   * outgoing 记录了锁的等待关系, 例如
+   * 事务 T1 等待 T2 的锁...
+   * 被等待的事务: [T2] [T3] [T1] [T2]
+   * 等待中的事务: [T1] [T2] [T3] [T4]
+   * outgoing[0] = 1, 0 是 T1 的下标, 1 是被等待的事务 T2 的下标.
+   * 死锁的检测方式就是迭代  outgoing, 使用 colors 记录迭代的路径来判断是否回环.
+   * 例如上述等待关系,
+   * outgoing[0] = 1, outgoing[1] = 2, outgoing[3] = 1
+   * colors 的值代表当前的迭代 value.
+   * colors[0] = 1, colors[1] = 1, colors[2] = 1,
+   * 所以当再次迭代到事务 1 时, 会发现 colors[0] 的值已经是 1 了, 即回环出现. */
   for (uint start = 0; start < n; ++start) {
     if (colors[start] != 0) {
       /* This node was already fully processed*/
@@ -1298,6 +1362,7 @@ static void lock_wait_find_and_handle_deadlocks(
         can stop now */
       if (colors[id] == current_color) {
         /* found a candidate cycle! */
+        /* 构造回环的等待关系. */
         lock_wait_extract_cycle_ids(cycle_ids, id, outgoing);
         if (lock_wait_check_candidate_cycle(cycle_ids, infos, new_weights)) {
           MONITOR_INC(MONITOR_DEADLOCK);
@@ -1325,10 +1390,17 @@ static void lock_wait_compute_incoming_count(const ut::vector<int> &outgoing,
                                              ut::vector<uint> &incoming_count) {
   incoming_count.clear();
   const size_t n = outgoing.size();
+  /* incoming_count 的默认值是 0. */
   incoming_count.resize(n, 0);
   for (size_t id = 0; id < n; ++id) {
+    /* outgoing 记录的是等待 lock 的事务正在等待的事务 ID,
+     * -1 代表被等待的事务不存在当前的等待关系图中.
+     * 等待关系图记录了所有被阻塞的事务. */
     const auto to = outgoing[id];
     if (to != -1) {
+      /* to 代表的是第 id 个事务所等待的事务索引下标.
+       * to != -1 即代表该事务也存在于当前的等待关系里,
+       * 将 to 的入度(指向该顶点的边的总数)加一. */
       incoming_count[to]++;
     }
   }
@@ -1437,6 +1509,7 @@ void lock_wait_timeout_thread() {
   do {
     auto now = ut_time();
     if (0.5 < ut_difftime(now, last_checked_for_timeouts_at)) {
+      /* 超过 0.5 秒即检查等待线程是否超时. */
       last_checked_for_timeouts_at = now;
       lock_wait_check_slots_for_timeouts();
     }

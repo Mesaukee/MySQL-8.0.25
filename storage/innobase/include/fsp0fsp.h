@@ -139,6 +139,8 @@ descriptor page, but used only in the first. */
 #define FSP_SIZE                    \
   8 /* Current size of the space in \
     pages */
+/* FSP_FREE_LIMIT 是目前在空闲的 Extent 上最小的尚未被初始化的 Page 的 Page Number.
+ * (注意是 Page Number) */
 #define FSP_FREE_LIMIT                       \
   12 /* Minimum page number for which the    \
      free list has not been initialized:     \
@@ -156,6 +158,7 @@ descriptor page, but used only in the first. */
 #define FSP_FRAG_N_USED                            \
   20                /* number of used pages in the \
                     FSP_FREE_FRAG list */
+/* 所有的 Page 均为空闲的 Extent 的数量. */
 #define FSP_FREE 24 /* list of free extents */
 #define FSP_FREE_FRAG (24 + FLST_BASE_NODE_SIZE)
 /* list of partially free extents not

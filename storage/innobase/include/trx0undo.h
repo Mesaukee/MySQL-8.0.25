@@ -468,6 +468,7 @@ void trx_undo_gtid_write(trx_t *trx, trx_ulogf_t *undo_header, trx_undo_t *undo,
     start on this page (remember that     \
     in an update undo log, the first page \
     can contain several undo logs) */
+/* 当前 undo page 空闲位置的起始 offset. */
 #define TRX_UNDO_PAGE_FREE                 \
   4 /*!< On each page of the undo log this \
     field contains the byte offset of the  \

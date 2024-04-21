@@ -466,6 +466,7 @@ void page_cur_search_with_match(const buf_block_t *block,
   directory, after that as a linear search in the list of records
   owned by the upper limit directory slot. */
 
+  /* 二分查找. */
   low = 0;
   up = page_dir_get_n_slots(page) - 1;
 
@@ -474,6 +475,7 @@ void page_cur_search_with_match(const buf_block_t *block,
 
   while (up - low > 1) {
     mid = (low + up) / 2;
+    /* 获取中间的 slot, 并获取对应的 record. */
     slot = page_dir_get_nth_slot(page, mid);
     mid_rec = page_dir_slot_get_rec(slot);
 
@@ -488,9 +490,11 @@ void page_cur_search_with_match(const buf_block_t *block,
                                 dtuple_get_n_fields_cmp(tuple), &heap);
     }
 
+    /* 比较 mid_rec 和 search_tuple. */
     cmp = tuple->compare(mid_rec, index, offsets, &cur_matched_fields);
 
     if (cmp > 0) {
+      /* search_tuple 大于 mid_rec. */
     low_slot_match:
       low = mid;
       low_matched_fields = cur_matched_fields;
@@ -518,6 +522,7 @@ void page_cur_search_with_match(const buf_block_t *block,
     }
   }
 
+  /* 获取数据 page 内的 dir slot. */
   slot = page_dir_get_nth_slot(page, low);
   low_rec = page_dir_slot_get_rec(slot);
   slot = page_dir_get_nth_slot(page, up);
@@ -526,6 +531,7 @@ void page_cur_search_with_match(const buf_block_t *block,
   /* Perform linear search until the upper and lower records come to
   distance 1 of each other. */
 
+  /* 在 dir slot 中迭代查找. */
   while (page_rec_get_next_const(low_rec) != up_rec) {
     mid_rec = page_rec_get_next_const(low_rec);
 
@@ -543,11 +549,13 @@ void page_cur_search_with_match(const buf_block_t *block,
     cmp = tuple->compare(mid_rec, index, offsets, &cur_matched_fields);
 
     if (cmp > 0) {
+      /* search_tuple 大于 mid_rec. */
     low_rec_match:
       low_rec = mid_rec;
       low_matched_fields = cur_matched_fields;
 
     } else if (cmp) {
+      /* search_tuple 小于 mid_rec. */
 #ifdef PAGE_CUR_LE_OR_EXTENDS
       if (mode == PAGE_CUR_LE_OR_EXTENDS &&
           page_cur_rec_field_extends(tuple, mid_rec, offsets,
@@ -585,6 +593,7 @@ void page_cur_search_with_match(const buf_block_t *block,
     }
   }
 
+  /* 将对应的 record 保存在 cursor 内. */
   if (mode <= PAGE_CUR_GE) {
     page_cur_position(up_rec, block, cursor);
   } else {
@@ -703,6 +712,7 @@ void page_cur_search_with_match_bytes(
   slots come to the distance 1 of each other */
 
   while (up - low > 1) {
+    /* 二分查找, 取中间的 dir slot. */
     mid = (low + up) / 2;
     slot = page_dir_get_nth_slot(page, mid);
     mid_rec = page_dir_slot_get_rec(slot);
@@ -755,6 +765,7 @@ void page_cur_search_with_match_bytes(
   /* Perform linear search until the upper and lower records come to
   distance 1 of each other. */
 
+  /* 在两个相邻的 dir slot 中迭代查找. */
   while (page_rec_get_next_const(low_rec) != up_rec) {
     mid_rec = page_rec_get_next_const(low_rec);
 
@@ -769,12 +780,14 @@ void page_cur_search_with_match_bytes(
                                           &cur_matched_bytes);
 
     if (cmp > 0) {
+      /* search_tuple 大于 mid_rec. */
     low_rec_match:
       low_rec = mid_rec;
       low_matched_fields = cur_matched_fields;
       low_matched_bytes = cur_matched_bytes;
 
     } else if (cmp) {
+      /* search_tuple 小于 mid_rec. */
 #ifdef PAGE_CUR_LE_OR_EXTENDS
       if (mode == PAGE_CUR_LE_OR_EXTENDS &&
           page_cur_rec_field_extends(tuple, mid_rec, offsets,
@@ -783,10 +796,11 @@ void page_cur_search_with_match_bytes(
       }
 #endif /* PAGE_CUR_LE_OR_EXTENDS */
     up_rec_match:
-      up_rec = mid_rec;
+      up_rec = mid_rec; /*  大于 search_tuple 的 record*/
       up_matched_fields = cur_matched_fields;
       up_matched_bytes = cur_matched_bytes;
     } else if (mode == PAGE_CUR_G || mode == PAGE_CUR_LE
+      /* search_tuple 和 mid_rec 相等: PAGE_CUR_G or PAGE_CUR_LE. */
 #ifdef PAGE_CUR_LE_OR_EXTENDS
                || mode == PAGE_CUR_LE_OR_EXTENDS
 #endif /* PAGE_CUR_LE_OR_EXTENDS */
@@ -809,10 +823,15 @@ void page_cur_search_with_match_bytes(
 
       goto low_rec_match;
     } else {
+      /* search_tuple 和 mid_rec 相等: PAGE_CUR_L or PAGE_CUR_GE. */
       goto up_rec_match;
     }
   }
 
+  /* PAGE_CUR_G: 返回第一个大于 dtuple 的 rec_t.
+   * PAGE_CUR_GE: 返回第一个大于等于 dtuple 的 rec_t.
+   * PAGE_CUR_L: 返回最后一个小于 dtuple 的 rec_t.
+   * PAGE_CUR_LE: 返回最后一个小于等于 dtuple 的 rec_t. */
   if (mode <= PAGE_CUR_GE) {
     page_cur_position(up_rec, block, cursor);
   } else {
@@ -960,6 +979,7 @@ static void page_cur_insert_rec_write_log(
 
     log_end = &log_ptr[2 + 5 + 1 + 5 + 5 + MLOG_BUF_MARGIN];
     /* Write the cursor rec offset as a 2-byte ulint */
+    /* 记录 rec 在 page 中 offset. */
     mach_write_to_2(log_ptr, page_offset(cursor_rec));
     log_ptr += 2;
   } else {
@@ -1064,6 +1084,7 @@ byte *page_cur_parse_insert_rec(
       return (nullptr);
     }
 
+    /* 获取 cursor record 在 page 中 offset. */
     offset = mach_read_from_2(ptr);
     ptr += 2;
 
@@ -1129,6 +1150,7 @@ byte *page_cur_parse_insert_rec(
   /* Read from the log the inserted index record end segment which
   differs from the cursor record */
 
+  /* 获取 cursor_rec 的 offsets 数组. */
   offsets = rec_get_offsets(cursor_rec, index, offsets, ULINT_UNDEFINED, &heap);
 
   if (!(end_seg_len & 0x1UL)) {
@@ -1168,6 +1190,7 @@ byte *page_cur_parse_insert_rec(
     rec_set_info_bits_old(buf + origin_offset, info_and_status_bits);
   }
 
+  /* 将 cursor 定位到 cursor_rec. */
   page_cur_position(cursor_rec, block, &cursor);
 
   offsets = rec_get_offsets(buf + origin_offset, index, offsets,
@@ -1304,6 +1327,7 @@ rec_t *page_cur_insert_rec_low(
       ut_ad(rec_get_status(next_rec) != REC_STATUS_INFIMUM);
     }
 #endif
+    /* 在 REC_NEXT 处写入下一个 record 的 offset. */
     page_rec_set_next(insert_rec, next_rec);
     page_rec_set_next(current_rec, insert_rec);
   }
@@ -1322,6 +1346,7 @@ rec_t *page_cur_insert_rec_low(
 
   UNIV_MEM_ASSERT_RW(rec_get_start(insert_rec, offsets),
                      rec_offs_size(offsets));
+
   /* 6. Update the last insertion info in page header */
 
   last_insert = page_header_get_ptr(page, PAGE_LAST_INSERT);
@@ -1418,7 +1443,7 @@ rec_t *page_cur_direct_insert_rec_low(rec_t *current_rec, dict_index_t *index,
   rec_size = index->rec_cache.rec_size;
 
   /* 2. Try to find suitable space from page memory management */
-  free_rec = page_header_get_ptr(page, PAGE_FREE);
+  free_rec = page_header_get_ptr(page, PAGE_FREE); /* 获取下一个可以插入的位置. */
   if (free_rec) {
     /* Try to allocate from the head of the free list. */
     ulint foffsets_[REC_OFFS_NORMAL_SIZE];
@@ -1488,6 +1513,7 @@ rec_t *page_cur_direct_insert_rec_low(rec_t *current_rec, dict_index_t *index,
     page_rec_set_next(current_rec, insert_rec);
   }
 
+  /* 当前 page 的 user record 数量. */
   page_header_set_field(page, nullptr, PAGE_N_RECS, 1 + page_get_n_recs(page));
 
   /* 5. Set the n_owned field in the inserted record to zero,
@@ -1527,16 +1553,21 @@ rec_t *page_cur_direct_insert_rec_low(rec_t *current_rec, dict_index_t *index,
     page_header_set_field(page, nullptr, PAGE_N_DIRECTION, 0);
   }
 
+  /* 使用 insert_rec 的 offset 更新 PAGE_LAST_INSERT. */
   page_header_set_ptr(page, nullptr, PAGE_LAST_INSERT, insert_rec);
 
   /* 7. It remains to update the owner record. */
   {
+    /* 查找插入的 record 的 owner record, 目的是存放在 owner record 的 dir slot 中,
+     * 在 dir slot 中指向的 record 的 REC_OLD_N_OWNED 均不为 0. */
     rec_t *owner_rec = page_rec_find_owner_rec(insert_rec);
     ulint n_owned;
     if (page_is_comp(page)) {
+      /* 递增 owner record 的 n_owned. */
       n_owned = rec_get_n_owned_new(owner_rec);
       rec_set_n_owned_new(owner_rec, nullptr, n_owned + 1);
     } else {
+      /* 递增 owner record 的 n_owned. */
       n_owned = rec_get_n_owned_old(owner_rec);
       rec_set_n_owned_old(owner_rec, n_owned + 1);
     }
@@ -1545,6 +1576,7 @@ rec_t *page_cur_direct_insert_rec_low(rec_t *current_rec, dict_index_t *index,
     record. If the number exceeds PAGE_DIR_SLOT_MAX_N_OWNED,
     we have to split the corresponding directory slot in two. */
 
+    /* 如果一个 dir slot 的 record 数量超过了8个, 需要进行分裂. */
     if (n_owned == PAGE_DIR_SLOT_MAX_N_OWNED) {
       page_dir_split_slot(page, nullptr, page_dir_find_owner_slot(owner_rec));
     }
@@ -2414,6 +2446,7 @@ void page_cur_delete_rec(
   page_dir_slot_set_n_owned(cur_dir_slot, page_zip, cur_n_owned - 1);
 
   /* 6. Free the memory occupied by the record */
+  /* 更新 Page 上 PAGE_GARBAGE 的大小. */
   page_mem_free(page, page_zip, current_rec, index, offsets);
 
   /* 7. Now we have decremented the number of owned records of the slot.

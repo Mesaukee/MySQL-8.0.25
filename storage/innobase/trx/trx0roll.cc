@@ -100,6 +100,7 @@ static void trx_rollback_to_savepoint_low(
   trx->error_state = DB_SUCCESS;
 
   if (trx_is_rseg_updated(trx)) {
+    /* 对于存在 insert/update 的事务. */
     ut_ad(trx->rsegs.m_redo.rseg != nullptr ||
           trx->rsegs.m_noredo.rseg != nullptr);
 
@@ -195,6 +196,7 @@ static dberr_t trx_rollback_low(trx_t *trx) {
       assert_trx_nonlocking_or_in_list(trx);
       /* Check an validate that undo is available for GTID. */
       trx_undo_gtid_add_update_undo(trx, false, true);
+      /* 回滚活跃事务. */
       return (trx_rollback_for_mysql_low(trx));
 
     case TRX_STATE_PREPARED:
@@ -259,6 +261,7 @@ static dberr_t trx_rollback_low(trx_t *trx) {
 
 /** Rollback a transaction used in MySQL.
  @return error code or DB_SUCCESS */
+/* 回滚事务. */
 dberr_t trx_rollback_for_mysql(trx_t *trx) /*!< in/out: transaction */
 {
   /* Avoid the tracking of async rollback killer
@@ -754,6 +757,7 @@ encountered in crash recovery.  If the transaction already was
 committed, then we clean up a possible insert undo log. If the
 transaction was not yet committed, then we roll it back.
 Note: this is done in a background thread. */
+/* 事务异步回滚. */
 void trx_recovery_rollback_thread() {
 #ifdef UNIV_PFS_THREAD
   THD *thd =
@@ -771,6 +775,7 @@ void trx_recovery_rollback_thread() {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
+  /* 开启事务故障恢复的回滚. */
   trx_rollback_or_clean_recovered(TRUE);
 
   destroy_thd(thd);
@@ -785,6 +790,7 @@ static void trx_roll_try_truncate(
   ut_ad(mutex_own(&trx->undo_mutex));
   ut_ad(mutex_own(&undo_ptr->rseg->mutex));
 
+  /* 重置 pages_undone. */
   trx->pages_undone = 0;
 
   if (undo_ptr->insert_undo) {
@@ -810,6 +816,7 @@ static const page_t *trx_roll_pop_top_rec(trx_t *trx, trx_undo_t *undo,
   const page_t *undo_page = trx_undo_page_get_s_latched(
       page_id_t(undo->space, undo->top_page_no), undo->page_size, mtr);
 
+  /* top_offset 为最新的 undo log reocrd 的 offset. */
   *undo_offset = static_cast<uint32_t>(undo->top_offset);
 
   trx_undo_rec_t *prev_rec =
@@ -817,14 +824,18 @@ static const page_t *trx_roll_pop_top_rec(trx_t *trx, trx_undo_t *undo,
                             undo->hdr_page_no, undo->hdr_offset, true, mtr);
 
   if (prev_rec == nullptr) {
+    /* 对于 prev_rec 为 nullptr 的情况, 即该回滚段已经回滚完毕. */
     undo->empty = TRUE;
   } else {
+    /* 获取 prev_rec 对应的 undo page. */
     page_t *prev_rec_page = page_align(prev_rec);
 
     if (prev_rec_page != undo_page) {
+      /* 目前回滚的 Page 数量加 1. */
       trx->pages_undone++;
     }
 
+    /* 更新回滚段最新的 page no, offset 和 undo number. */
     undo->top_page_no = page_get_page_no(prev_rec_page);
     undo->top_offset = prev_rec - prev_rec_page;
     undo->top_undo_no = trx_undo_rec_get_undo_no(prev_rec);
@@ -861,6 +872,7 @@ static trx_undo_rec_t *trx_roll_pop_top_rec_of_trx_low(
   mutex_enter(&trx->undo_mutex);
 
   if (trx->pages_undone >= TRX_ROLL_TRUNC_THRESHOLD) {
+    /* 对于已经回滚的 Page 数量大于等于 1 的情况, 需要进行 truncate. */
     rseg->latch();
 
     trx_roll_try_truncate(trx, undo_ptr);
@@ -891,6 +903,7 @@ static trx_undo_rec_t *trx_roll_pop_top_rec_of_trx_low(
 
   is_insert = (undo == ins_undo);
 
+  /* 构建 roll ptr. */
   *roll_ptr = trx_undo_build_roll_ptr(is_insert, undo->rseg->space_id,
                                       undo->top_page_no, undo->top_offset);
 
@@ -924,6 +937,7 @@ static trx_undo_rec_t *trx_roll_pop_top_rec_of_trx_low(
   trx->undo_no = undo_no;
   trx->undo_rseg_space = undo->rseg->space_id;
 
+  /* 构建 undo record 的拷贝. */
   undo_rec_copy =
       trx_undo_rec_copy(undo_page, static_cast<uint32_t>(undo_offset), heap);
 
@@ -946,6 +960,7 @@ trx_undo_rec_t *trx_roll_pop_top_rec_of_trx(
   trx_undo_rec_t *undo_rec = nullptr;
 
   if (trx_is_redo_rseg_updated(trx)) {
+    /* 对于存在 insert 和 update 回滚段的事务. */
     undo_rec = trx_roll_pop_top_rec_of_trx_low(trx, &trx->rsegs.m_redo, limit,
                                                roll_ptr, heap);
   }
@@ -1005,6 +1020,7 @@ static que_thr_t *trx_rollback_start(trx_t *trx, ib_id_t roll_limit,
 
   ut_a(trx->roll_limit <= trx->undo_no);
 
+  /* 设置已经回滚的 undo page 数量为 0. */
   trx->pages_undone = 0;
 
   /* Build a 'query' graph which will perform the undo operations */

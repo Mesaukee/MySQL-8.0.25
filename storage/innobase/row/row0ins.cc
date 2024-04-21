@@ -2974,6 +2974,8 @@ dberr_t row_ins_sec_index_entry_low(uint32_t flags, ulint mode,
   }
 
   if (row_ins_must_modify_rec(&cursor)) {
+    /*  二级索引 record 没有发生变化, 直接原地 update. */
+
     /* If the existing record is being modified and the new record
     is doesn't fit the provided slot then existing record is added
     to free list and new record is inserted. This also means
@@ -3094,6 +3096,7 @@ and return. don't execute actual insert. */
     }
     err = row_ins_sorted_clust_index_entry(BTR_MODIFY_LEAF, index, entry, thr);
   } else {
+    /* 乐观插入使用 BTR_MODIFY_LEAF. */
     err = row_ins_clust_index_entry_low(flags, BTR_MODIFY_LEAF, index, n_uniq,
                                         entry, thr, dup_chk_only);
   }
@@ -3119,6 +3122,7 @@ and return. don't execute actual insert. */
   if (index->table->is_intrinsic() && dict_index_is_auto_gen_clust(index)) {
     err = row_ins_sorted_clust_index_entry(BTR_MODIFY_TREE, index, entry, thr);
   } else {
+    /* 悲观插入使用 BTR_MODIFY_TREE. */
     err = row_ins_clust_index_entry_low(flags, BTR_MODIFY_TREE, index, n_uniq,
                                         entry, thr, dup_chk_only);
   }
@@ -3675,8 +3679,6 @@ error_handling:
     /* err == DB_LOCK_WAIT or SQL error detected */
     return (nullptr);
   }
-
-  /* DO THE TRIGGER ACTIONS HERE */
 
   if (node->ins_type == INS_SEARCHED) {
     /* Fetch a row to insert */

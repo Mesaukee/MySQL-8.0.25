@@ -715,6 +715,7 @@ static void trx_resurrect_table_ids(trx_t *trx, const trx_undo_ptr_t *undo_ptr,
       undo_page = undo_rec_page;
     }
 
+    /* 获取 table id. */
     trx_undo_rec_get_pars(undo_rec, &type, &cmpl_info, &updated_extern,
                           &undo_no, &table_id, type_cmpl);
     tables.insert(table_id);
@@ -956,10 +957,13 @@ static void trx_resurrect(trx_rseg_t *rseg) {
   /* Resurrect transactions that were doing inserts. */
   for (undo = UT_LIST_GET_FIRST(rseg->insert_undo_list); undo != nullptr;
        undo = UT_LIST_GET_NEXT(undo_list, undo)) {
+    /* 构造事务. */
     trx = trx_resurrect_insert(undo, rseg);
 
+    /* 将事务添加至事务列表. */
     trx_sys_rw_trx_add(trx);
 
+    /* 恢复 table id, 用以在数据字段恢复时重新加锁 srv_dict_recover_on_restart(). */
     trx_resurrect_table_ids(trx, &trx->rsegs.m_redo, undo);
   }
 
@@ -982,8 +986,10 @@ static void trx_resurrect(trx_rseg_t *rseg) {
 
     trx_resurrect_update(trx, undo, rseg);
 
+    /* 将事务添加至事务列表. */
     trx_sys_rw_trx_add(trx);
 
+    /* 恢复 table id, 用以在数据字段恢复时重新加锁 srv_dict_recover_on_restart(). */
     trx_resurrect_table_ids(trx, &trx->rsegs.m_redo, undo);
   }
 }
@@ -1287,6 +1293,7 @@ static void trx_start_low(
     /* Temporary rseg is assigned only if the transaction
     updates a temporary table */
 
+    /* 对于读写事务. */
     trx_sys_mutex_enter();
 
     trx->id = trx_sys_get_new_trx_id();
@@ -1309,6 +1316,7 @@ static void trx_start_low(
     trx_sys_mutex_exit();
 
   } else {
+    /* 对于纯读事务 id 设置为 0. */
     trx->id = 0;
 
     if (!trx_is_autocommit_non_locking(trx)) {
@@ -1450,6 +1458,7 @@ static bool trx_write_serialisation_history(
 
   /* Get rollback segment mutex. */
   if (trx->rsegs.m_redo.rseg != nullptr && trx_is_redo_rseg_updated(trx)) {
+    /* 获取回滚段的 mutex. */
     trx->rsegs.m_redo.rseg->latch();
     own_redo_rseg_mutex = true;
   }
@@ -1483,6 +1492,7 @@ static bool trx_write_serialisation_history(
     if this is the first UNDO log being written to assigned
     rollback segments. */
 
+    /* 对于 update 操作, 需要做 purge 处理. */
     trx_undo_ptr_t *redo_rseg_undo_ptr =
         trx->rsegs.m_redo.update_undo != nullptr ? &trx->rsegs.m_redo : nullptr;
 
@@ -1491,6 +1501,8 @@ static bool trx_write_serialisation_history(
                                                    : nullptr;
 
     /* Will set trx->no and will add rseg to purge queue. */
+    /* 设置 trx->no 并将回滚段插入 purge 队列.
+     * 截止这一步, 回滚段的 purge 信息尚未更新. */
     serialised = trx_serialisation_number_get(trx, redo_rseg_undo_ptr,
                                               temp_rseg_undo_ptr);
 
@@ -1500,6 +1512,7 @@ static bool trx_write_serialisation_history(
     if (trx->rsegs.m_redo.update_undo != nullptr) {
       page_t *undo_hdr_page;
 
+      /* 更新 undo log segment 的事务信息, 例如 TRX_UNDO_STATE. */
       undo_hdr_page =
           trx_undo_set_state_at_finish(trx->rsegs.m_redo.update_undo, mtr);
 
@@ -1513,6 +1526,7 @@ static bool trx_write_serialisation_history(
       auto undo_ptr = &trx->rsegs.m_redo;
       trx_undo_gtid_set(trx, undo_ptr->update_undo, false);
 
+      /* 将 undo log 插入 history list. */
       trx_undo_update_cleanup(trx, undo_ptr, undo_hdr_page, update_rseg_len,
                               (update_rseg_len ? 1 : 0), mtr);
     }

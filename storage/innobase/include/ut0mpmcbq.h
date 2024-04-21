@@ -38,16 +38,23 @@ class mpmc_bq {
  public:
   /** Constructor
   @param[in]	n_elems		Max number of elements allowed */
+  /* 构造函数, 传入的参数为队列的长度, 必须为 2 的倍数. */
   explicit mpmc_bq(size_t n_elems)
+        /* 构造 n_elems 个元素, Cell 为元素. */
       : m_ring(reinterpret_cast<Cell *>(UT_NEW_ARRAY_NOKEY(Aligned, n_elems))),
         m_capacity(n_elems - 1) {
     /* Should be a power of 2 */
     ut_a((n_elems >= 2) && ((n_elems & (n_elems - 1)) == 0));
 
     for (size_t i = 0; i < n_elems; ++i) {
+      /* 初始化每个元素.
+       * Cell 有两个数据成员: m_data, m_pos.
+       * m_pos 初始化为元素对应的索引下标, 0, 1, 2, ... */
       m_ring[i].m_pos.store(i, std::memory_order_relaxed);
     }
 
+    /* m_enqueue_pos 代表下一个可以插入的空闲的元素索引下标, 初始化 0. */
+    /* m_dequeue_pos 代表下一个可以出列的元素索引下标, 初始化 0. */
     m_enqueue_pos.store(0, std::memory_order_relaxed);
     m_dequeue_pos.store(0, std::memory_order_relaxed);
   }
@@ -58,6 +65,7 @@ class mpmc_bq {
   /** Enqueue an element
   @param[in]	data		Element to insert, it will be copied
   @return true on success */
+  /* 元素入列. */
   bool enqueue(T const &data) MY_ATTRIBUTE((warn_unused_result)) {
     /* m_enqueue_pos only wraps at MAX(m_enqueue_pos), instead
     we use the capacity to convert the sequence to an array
@@ -65,17 +73,21 @@ class mpmc_bq {
     is a power of 2. This also allows the sequence to double
     as a ticket/lock. */
 
+    /* 获取当前的 m_enqueue_pos. */
     size_t pos = m_enqueue_pos.load(std::memory_order_relaxed);
 
     Cell *cell;
 
     for (;;) {
+      /* 以 m_capacity 取模求对应位置的元素. */
       cell = &m_ring[pos & m_capacity];
 
       size_t seq;
 
+      /* 获取元素 cell 的 m_pos. */
       seq = cell->m_pos.load(std::memory_order_acquire);
 
+      /* 计算 cell->m_pos 和 m_enqueue_pos 的差值. */
       intptr_t diff = (intptr_t)seq - (intptr_t)pos;
 
       /* If they are the same then it means this cell is empty */
@@ -86,6 +98,8 @@ class mpmc_bq {
         faster, but can return spurious results which in this instance is OK,
         because it's in the loop */
 
+        /* cell->m_pos 和 m_enqueue_pos 相等代表 cell 为空闲状态, m_enqueue_pos 自增 1,
+         * 假如自增失败即代表当前位置的 cell 已被占用, 需要重新获取 m_enqueue_pos. */
         if (m_enqueue_pos.compare_exchange_weak(pos, pos + 1,
                                                 std::memory_order_relaxed)) {
           break;
@@ -94,9 +108,13 @@ class mpmc_bq {
       } else if (diff < 0) {
         /* The queue is full */
 
+        /* cell->m_pos 和 m_enqueue_pos 在入列成功的状态下都是自增 1.
+         * diff < 0  即代表 m_enqueue_pos 已经回环，但当前的 cell 仍未出列. */
+
         return (false);
 
       } else {
+        /* 重新获取 m_enqueue_pos. */
         pos = m_enqueue_pos.load(std::memory_order_relaxed);
       }
     }
@@ -105,6 +123,7 @@ class mpmc_bq {
 
     /* Increment the sequence so that the tail knows it's accessible */
 
+    /* cell->m_pos 自增 1. */
     cell->m_pos.store(pos + 1, std::memory_order_release);
 
     return (true);
@@ -113,15 +132,20 @@ class mpmc_bq {
   /** Dequeue an element
   @param[out]	data		Element read from the queue
   @return true on success */
+  /* 元素出列. */
   bool dequeue(T &data) MY_ATTRIBUTE((warn_unused_result)) {
     Cell *cell;
+    /* 获取当前的 m_dequeue_pos. */
     size_t pos = m_dequeue_pos.load(std::memory_order_relaxed);
 
     for (;;) {
+      /* 以 m_capacity 取模求对应位置的元素. */
       cell = &m_ring[pos & m_capacity];
 
+      /* 获取元素 cell 的 m_pos. */
       size_t seq = cell->m_pos.load(std::memory_order_acquire);
 
+      /* 计算 cell->m_pos 和 m_dequeue_pos + 1 的差值. */
       auto diff = (intptr_t)seq - (intptr_t)(pos + 1);
 
       if (diff == 0) {
@@ -130,6 +154,10 @@ class mpmc_bq {
         faster, but can return spurious results. Which in this instance is
         OK, because it's in the loop. */
 
+        /* cell->m_pos 和 m_dequeue_pos + 1 相等代表 cell 已经是成功入列的元素,
+         * 因为在每次成功入列后, cell->m_pos 会自增 1.
+         * 尝试 m_dequeue_pos 自增 1,
+         * 假如自增失败即代表当前位置的 cell 已被出列, 需要重新获取 m_dequeue_pos. */
         if (m_dequeue_pos.compare_exchange_weak(pos, pos + 1,
                                                 std::memory_order_relaxed)) {
           break;
@@ -137,19 +165,26 @@ class mpmc_bq {
 
       } else if (diff < 0) {
         /* The queue is empty */
+
+        /* cell 入列成功会将 m_pos 自增 1, 所以假如 m_pos 小于 m_dequeue_pos + 1,
+         * 即代表 cell 元素暂未入列. */
         return (false);
 
       } else {
         /* Under normal circumstances this branch should never be taken. */
+
+        /* 重新获取 m_dequeue_pos. */
         pos = m_dequeue_pos.load(std::memory_order_relaxed);
       }
     }
 
+    /* 获取对应元素的数据成员. */
     data = cell->m_data;
 
     /* Set the sequence to what the head sequence should be next
     time around */
 
+    /* 更新 cell->m_pos 为  m_dequeue_pos + m_capacity + 1. */
     cell->m_pos.store(pos + m_capacity + 1, std::memory_order_release);
 
     return (true);
@@ -186,6 +221,7 @@ class mpmc_bq {
  private:
   using Pad = byte[ut::INNODB_CACHE_LINE_SIZE];
 
+  /* 队列的元素. */
   struct Cell {
     std::atomic<size_t> m_pos;
     T m_data;

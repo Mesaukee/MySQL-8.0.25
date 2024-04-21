@@ -1328,22 +1328,28 @@ static UNIV_COLD ulint fsp_try_extend_data_file(fil_space_t *space,
 
   } else {
     /* Check if the tablespace supports autoextend_size */
+    /* autoextend_size_pages 代表扩容多少个 page. */
     page_no_t autoextend_size_pages =
         space->autoextend_size_in_bytes / page_size.physical();
     if (autoextend_size_pages > 0) {
+      /* 参数设置了 autoextend. */
       ut_ad((autoextend_size_pages % fsp_get_extent_size_in_pages(page_size)) ==
             0);
 
       /* If the current size is not a multiple of autoextend_size, allocate just
       enough to make the file size a multiple of autoextend_size. */
+      /* 计算扩容的 Page 数量. */
       if ((size % autoextend_size_pages) > 0) {
         size_increase = autoextend_size_pages - (size % autoextend_size_pages);
       } else {
         size_increase = autoextend_size_pages;
       }
     } else {
+      /* 假如没有设置 autoextend 参数. */
+      /* 计算一个 extent 有多少个 Page. */
       page_no_t extent_pages = fsp_get_extent_size_in_pages(page_size);
       if (size < extent_pages) {
+        /* 假如没有达到一个 extent 的 page 数量, 先扩容至一个 extent 的大小. */
         /* Let us first extend the file to extent_size */
         if (!fsp_try_extend_data_file_with_pages(space, extent_pages - 1,
                                                  header, mtr)) {
@@ -1353,6 +1359,7 @@ static UNIV_COLD ulint fsp_try_extend_data_file(fil_space_t *space,
         size = extent_pages;
       }
 
+      /* 计算需要扩展多少个 page. */
       size_increase = fsp_get_pages_to_extend_ibd(page_size, size);
     }
 
@@ -1381,6 +1388,7 @@ static UNIV_COLD ulint fsp_try_extend_data_file(fil_space_t *space,
   space->size_in_header =
       ut_calc_align_down(space->size, (1024 * 1024) / page_size.physical());
 
+  /* 更新 FSP_SIZE. */
   fsp_header_size_update(header, space->size_in_header, mtr);
 
   return true;

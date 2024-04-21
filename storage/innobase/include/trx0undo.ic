@@ -232,10 +232,13 @@ trx_undo_rec_t *trx_undo_page_get_next_rec(
 
   undo_page = (page_t *)ut_align_down(rec, UNIV_PAGE_SIZE);
 
+  /* 查看当前 undo page 的最后一个 undo record 的 offset. */
   end = trx_undo_page_get_end(undo_page, page_no, offset);
 
   next = mach_read_from_2(rec);
 
+  /* 假如最后一个 undo record 的 offset 和下一个 offset 相等, 即
+   * 代表当前 record 已经是最后一个了. */
   if (next == end) {
     return (nullptr);
   }

@@ -1261,6 +1261,7 @@ static void buf_flush_write_block_low(buf_page_t *bpage, buf_flush_t flush_type,
       break;
   }
 
+  /* 调用 double write buffer 的写接口. */
   dberr_t err = dblwr::write(flush_type, bpage, sync);
 
   ut_a(err == DB_SUCCESS || err == DB_TABLESPACE_DELETED);
@@ -1382,6 +1383,7 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
         buf_flush_sync_datafiles();
       }
 
+      /* 针对写操作需要对 Page 加 SX 锁. 使用 SX 锁时可以使用 S 读锁. */
       rw_lock_sx_lock_gen(rw_lock, BUF_IO_WRITE);
     }
 
@@ -1399,6 +1401,7 @@ ibool buf_flush_page(buf_pool_t *buf_pool, buf_page_t *bpage,
     oldest_modification != 0.  Thus, it cannot be relocated in the
     buffer pool or removed from flush_list or LRU_list. */
 
+    /* 数据 Page 持久化操作. */
     buf_flush_write_block_low(bpage, flush_type, sync);
   }
 
@@ -1798,6 +1801,8 @@ static ulint buf_flush_LRU_list_batch(buf_pool_t *buf_pool, ulint max) {
       auto acquired = mutex_enter_nowait(block_mutex) == 0;
 
       if (acquired && buf_flush_ready_for_replace(bpage)) {
+        /* 针对 LRU list 中允许 evict 的 Page, 可以直接 evict, 脏页需要走
+         * 下面的 Flush 逻辑. */
         /* block is ready for eviction i.e., it is
         clean and is not IO-fixed or buffer fixed. */
         if (buf_LRU_free_page(bpage, true)) {
@@ -1807,6 +1812,7 @@ static ulint buf_flush_LRU_list_batch(buf_pool_t *buf_pool, ulint max) {
           mutex_exit(block_mutex);
         }
       } else if (acquired && buf_flush_ready_for_flush(bpage, BUF_FLUSH_LRU)) {
+        /* 针对 LRU list 中允许 flush 的 Page, 需要进行 flush 操作. */
         /* Block is ready for flush. Dispatch an IO request. The IO helper
         thread will put it on the free list in the IO completion routine. */
         mutex_exit(block_mutex);

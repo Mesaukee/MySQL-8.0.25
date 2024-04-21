@@ -59,6 +59,7 @@ read-ahead is not done: this is to prevent flooding the buffer pool with
 i/o-fixed buffer blocks */
 static constexpr size_t BUF_READ_AHEAD_PEND_LIMIT = 2;
 
+/* 读取 Page, 无论同步或者异步都调用该函数. */
 ulint buf_read_page_low(dberr_t *err, bool sync, ulint type, ulint mode,
                         const page_id_t &page_id, const page_size_t &page_size,
                         bool unzip) {
@@ -88,6 +89,7 @@ ulint buf_read_page_low(dberr_t *err, bool sync, ulint type, ulint mode,
   or is being dropped; if we succeed in initing the page in the buffer
   pool for read, then DISCARD cannot proceed until the read has
   completed */
+  /* 初始化一个 Page 用来读取, 将 Page 插入 LRU list, 并对 Page 加 X 锁. */
   bpage = buf_page_init_for_read(err, mode, page_id, page_size, unzip);
 
   ut_a(bpage == nullptr || bpage->get_space()->id == page_id.space());

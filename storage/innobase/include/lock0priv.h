@@ -84,6 +84,7 @@ struct lock_rec_t {
   page_id_t page_id;
   /** number of bits in the lock bitmap;
   NOTE: the lock bitmap is placed immediately after the lock struct */
+  /* 记录 Record 的 heap no. */
   uint32_t n_bits;
 
   /** Print the record lock into the given output stream

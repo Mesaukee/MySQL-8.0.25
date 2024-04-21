@@ -724,6 +724,7 @@ struct trx_lock_t {
   Values are updated and read without any synchronization beyond that provided
   by atomics, as slightly stale values do not hurt correctness, just the
   performance. */
+  /* 事务锁的调度权重. */
   std::atomic<trx_schedule_weight_t> schedule_weight;
 
 #ifdef UNIV_DEBUG

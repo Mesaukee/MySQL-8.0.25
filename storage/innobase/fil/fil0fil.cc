@@ -6454,6 +6454,7 @@ space_id_t fil_space_get_id_by_name(const char *name) {
 @param[in] read_only_mode
                         if true, then read only mode checks are enforced.
 @return DB_SUCCESS or error code */
+/* 文件填 0 .*/
 static dberr_t fil_write_zeros(const fil_node_t *file, ulint page_size,
                                os_offset_t start, os_offset_t len,
                                bool read_only_mode) {
@@ -6617,6 +6618,7 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
   mutex_release();
 
   page_no_t pages_added;
+  /* 获取当前文件的大小. */
   os_offset_t node_start = os_file_get_size(file->handle);
 
   ut_a(node_start != (os_offset_t)-1);
@@ -6625,17 +6627,20 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
   page_no_t node_first_page = space->size - file->size;
 
   /* Number of physical pages in the file */
+  /* 当前物理文件有多少个 page. */
   page_no_t n_node_physical_pages =
       static_cast<page_no_t>(node_start / phy_page_size);
 
   /* Number of pages to extend in the file */
   page_no_t n_node_extend;
 
+  /* 需要的扩展多少个 page. */
   n_node_extend = size - (node_first_page + file->size);
 
   /* If we already have enough physical pages to satisfy the
   extend request on the file then ignore it */
   if (file->size + n_node_extend > n_node_physical_pages) {
+    /* 物理文件不满足扩展的 page 数量, 需要进行 fallocate. */
     DBUG_EXECUTE_IF("ib_crash_during_tablespace_extension", DBUG_SUICIDE(););
 
     os_offset_t len;
@@ -6695,6 +6700,7 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
 #if !defined(NO_FALLOCATE) && defined(UNIV_LINUX)
     /* This is required by FusionIO HW/Firmware */
 
+    /* 为文件预分配物理空间. */
     int ret = posix_fallocate(file->handle.m_file, node_start, len);
 
     DBUG_EXECUTE_IF("ib_posix_fallocate_fail_eintr", ret = EINTR;);
@@ -6733,12 +6739,15 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
 
     if ((tbsp_extend_and_initialize && !file->atomic_write) ||
         err == DB_IO_ERROR) {
+      /* 假如设置了 tbsp_extend_and_initialize 为 true, 即 allocated 空间后
+       * 填 0 并且该文件没有打开原子写, 我们需要对该文件进行填 0 操作. */
       bool read_only_mode;
 
       read_only_mode =
           (space->purpose != FIL_TYPE_TEMPORARY ? false : srv_read_only_mode);
 
       err =
+          /* 文件填 0. */
           fil_write_zeros(file, phy_page_size, node_start, len, read_only_mode);
 
       if (err != DB_SUCCESS) {
@@ -6749,14 +6758,17 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
     }
 
     /* Check how many pages actually added */
+    /* 计算当前物理文件大小 (bytes). */
     os_offset_t end = os_file_get_size(file->handle);
     ut_a(end != static_cast<os_offset_t>(-1) && end >= node_start);
 
     os_has_said_disk_full = !(success = (end == node_start + len));
 
+    /* 计算当前物理文件有多少个 page. */
     pages_added = static_cast<page_no_t>(end / phy_page_size);
 
     ut_a(pages_added >= file->size);
+    /* 计算 extend 了多少个 page. */
     pages_added -= file->size;
 
   } else {
@@ -6767,6 +6779,7 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
 
   mutex_acquire();
 
+  /* 分别增加 page 数量. */
   file->size += pages_added;
   space->size += pages_added;
 
@@ -6806,6 +6819,7 @@ bool Fil_shard::space_extend(fil_space_t *space, page_no_t size) {
 @param[in,out]	space		Tablespace ID
 @param[in]	size		desired size in pages
 @return whether the tablespace is at least as big as requested */
+/* 扩展 Space 空间. */
 bool fil_space_extend(fil_space_t *space, page_no_t size) {
   auto shard = fil_system->shard_by_id(space->id);
 
@@ -8036,6 +8050,7 @@ dberr_t Fil_shard::do_io(const IORequest &type, bool sync,
   }
 #else /* UNIV_HOTBACKUP */
   /* Queue the aio request */
+  /* 将 IO 入列, 无论同步 IO 还是异步 IO. */
   err = os_aio(
       req_type, aio_mode, file->name, file->handle, buf, offset, len,
       fsp_is_system_temporary(page_id.space()) ? false : srv_read_only_mode,

@@ -3683,6 +3683,7 @@ dberr_t fts_query(trx_t *trx, dict_index_t *index, uint flags,
   query.fts_common_table.suffix = FTS_SUFFIX_DELETED;
 
   /* Read the deleted doc_ids, we need these for filtering. */
+  /* 首先读取 FTS_*_DELETED 表和 FTS_*_DELETED_CACHE 表中的 doc_ids. */
   error =
       fts_table_fetch_doc_ids(nullptr, &query.fts_common_table, query.deleted);
 

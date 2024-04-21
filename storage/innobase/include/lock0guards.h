@@ -31,6 +31,9 @@ this program; if not, write to the Free Software Foundation, Inc.,
 #include "ut0class_life_cycle.h"
 
 namespace locksys {
+/* Global_exclusive_latch_guard 与 Global_shared_latch_guard 的实现区别是
+ * 针对 lock_sys->latches.global_latch 添加 x_lock 或者 s_lock. */
+
 /**
 A RAII helper which latches global_latch in exclusive mode during constructor,
 and unlatches it during destruction, preventing any other threads from activity

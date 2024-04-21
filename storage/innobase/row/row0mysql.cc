@@ -1560,6 +1560,7 @@ static dberr_t row_insert_for_mysql_using_ins_graph(const byte *mysql_rec,
   row_get_prebuilt_insert_row(prebuilt);
   node = prebuilt->ins_node;
 
+  /* 将 record 从 sql 层格式转换为 InnoDB 层格式. */
   row_mysql_convert_row_to_innobase(node->row, prebuilt, mysql_rec, &blob_heap);
 
   savept = trx_savept_take(trx);
@@ -4422,6 +4423,7 @@ dberr_t row_mysql_parallel_select_count_star(
   for (auto index : indexes) {
     Parallel_reader::Config config(FULL_SCAN, index);
 
+    /* add_scan() 传入 3 个参数: <trx, config, 回调函数>. */
     success =
       reader.add_scan(trx, config, [&](const Parallel_reader::Ctx *ctx) {
       Counter::inc(n_recs, ctx->thread_id());

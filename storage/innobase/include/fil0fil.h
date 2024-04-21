@@ -443,9 +443,12 @@ struct fil_space_t {
   Files files{};
 
   /** Tablespace file size in pages; 0 if not known yet */
+  /* 当前 Tablespace 文件的 page 数量. */
   page_no_t size{};
 
   /** FSP_SIZE in the tablespace header; 0 if not known yet */
+  /* FSP_size 记录的是当前 space 的 page 数量, 是 space->size 向下 64 取整的结果.
+   * file->size 同样记录的是当前 space 的 page 数量. */
   page_no_t size_in_header{};
 
   /** Autoextend size */

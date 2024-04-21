@@ -243,6 +243,7 @@ func_exit:
  If none left, or a partial rollback completed, returns control to the
  parent node, which is always a query thread node.
  @return DB_SUCCESS if operation successfully completed, else error code */
+/* record 的回滚操作. */
 static MY_ATTRIBUTE((warn_unused_result)) dberr_t
     row_undo(undo_node_t *node, /*!< in: row undo node */
              que_thr_t *thr)    /*!< in: query thread */
@@ -258,6 +259,8 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   ut_ad(trx->in_rollback);
 
   if (node->state == UNDO_NODE_FETCH_NEXT) {
+    /* 获取当前最新的 undo log record.
+     * 事务的 undo log 回滚的顺序是从后往前. */
     node->undo_rec = trx_roll_pop_top_rec_of_trx(trx, trx->roll_limit,
                                                  &roll_ptr, node->heap);
 
@@ -292,11 +295,13 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   or ALTER TABLE should be impossible, because it should be
   holding both LOCK_X and MDL_EXCLUSIVE on the table. */
   if (node->state == UNDO_NODE_INSERT) {
+    /* 回滚 insert 操作. */
     err = row_undo_ins(node, thr);
 
     node->state = UNDO_NODE_FETCH_NEXT;
   } else {
     ut_ad(node->state == UNDO_NODE_MODIFY);
+    /* 回滚 update 操作. */
     err = row_undo_mod(node, thr);
   }
 

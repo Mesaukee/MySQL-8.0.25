@@ -135,6 +135,7 @@ const page_size_t TrxUndoRsegsIterator::set_next() {
         break;
       }
 
+      /* 移除选中的回滚段. */
       m_purge_sys->purge_queue->pop();
     }
 
@@ -329,6 +330,7 @@ void trx_purge_add_update_undo_to_history(
   undo_header = undo_page + undo->hdr_offset;
 
   if (undo->state != TRX_UNDO_CACHED) {
+    /* 针对无法复用的 undo log segment. */
     ulint hist_size;
 #ifdef UNIV_DEBUG
     trx_usegf_t *seg_header = undo_page + TRX_UNDO_SEG_HDR;
@@ -340,6 +342,7 @@ void trx_purge_add_update_undo_to_history(
       ib::fatal(ER_IB_MSG_1165) << "undo->id is " << undo->id;
     }
 
+    /* 将 undo log segment 重新放入回滚段 header 的 TRX_RSEG_UNDO_SLOTS. */
     trx_rsegf_set_nth_undo(rseg_header, undo->id, FIL_NULL, mtr);
 
     MONITOR_DEC(MONITOR_NUM_UNDO_SLOT_USED);
@@ -354,6 +357,7 @@ void trx_purge_add_update_undo_to_history(
   }
 
   /* Add the log as the first in the history list */
+  /* 插入 undo log segment 至回滚段的 history list 链表头部. */
   flst_add_first(rseg_header + TRX_RSEG_HISTORY,
                  undo_header + TRX_UNDO_HISTORY_NODE, mtr);
 
@@ -381,6 +385,7 @@ void trx_purge_add_update_undo_to_history(
   trx_undo_gtid_write(trx, undo_header, undo, mtr, false);
 
   if (rseg->last_page_no == FIL_NULL) {
+     /* 更新回滚段 Purge 相关的信息. */
     rseg->last_page_no = undo->hdr_page_no;
     rseg->last_offset = undo->hdr_offset;
     rseg->last_trx_no = trx->no;
@@ -512,9 +517,11 @@ static void trx_purge_truncate_rseg_history(
 
   rseg->latch();
 
+  /* 回滚段的 header. */
   rseg_hdr =
       trx_rsegf_get(rseg->space_id, rseg->page_no, rseg->page_size, &mtr);
 
+  /* 获取 undo log header.  */
   hdr_addr = trx_purge_get_log_from_hist(
       flst_get_last(rseg_hdr + TRX_RSEG_HISTORY, &mtr));
 loop:
@@ -528,14 +535,17 @@ loop:
   undo_page = trx_undo_page_get(page_id_t(rseg->space_id, hdr_addr.page),
                                 rseg->page_size, &mtr);
 
+  /* Undo log 的 header. */
   log_hdr = undo_page + hdr_addr.boffset;
 
+  /* Undo log 的 trx_no. */
   undo_trx_no = mach_read_from_8(log_hdr + TRX_UNDO_TRX_NO);
 
   if (undo_trx_no >= limit->trx_no) {
     /* limit space_id should match the rollback segment
     space id to avoid freeing if the page belongs to a
     different rollback segment for the same trx_no. */
+
     if (undo_trx_no == limit->trx_no &&
         rseg->space_id == limit->undo_rseg_space) {
       trx_undo_truncate_start(rseg, hdr_addr.page, hdr_addr.boffset,
@@ -548,6 +558,7 @@ loop:
     return;
   }
 
+  /* 记录前一个 undo log segment 用以下次 truncate. */
   prev_hdr_addr = trx_purge_get_log_from_hist(
       flst_get_prev_addr(log_hdr + TRX_UNDO_HISTORY_NODE, &mtr));
 
@@ -557,6 +568,9 @@ loop:
       (mach_read_from_2(log_hdr + TRX_UNDO_NEXT_LOG) == 0)) {
     /* We can free the whole log segment */
 
+    /* 对于 TRX_UNDO_STATE 的状态是需要 purge 的并且该 undo log segment 后续
+     * 不再有 undo log segment 串联(TRX_UNDO_NEXT_LOG == 0), 可以直接进行 undo
+     * log segment 的回收. */
     rseg->unlatch();
     mtr_commit(&mtr);
 
@@ -567,6 +581,7 @@ loop:
   } else {
     /* Remove the log hdr from the rseg history. */
 
+    /* 将其从 TRX_UNDO_HISTORY_NODE 摘除, 并且可以复用. */
     trx_purge_remove_log_hdr(rseg_hdr, log_hdr, &mtr);
 
     rseg->unlatch();
@@ -1592,6 +1607,7 @@ static void trx_purge_truncate_history(purge_iter_t *limit,
   /* We play safe and set the truncate limit at most to the purge view
   low_limit number, though this is not necessary */
 
+  /* 限制 truncate 操作的 trx_no, 避免回滚段的 truncate 超过了当前最旧的 read view. */
   if (limit->trx_no >= view->low_limit_no()) {
     limit->trx_no = view->low_limit_no();
     limit->undo_no = 0;
@@ -1599,6 +1615,8 @@ static void trx_purge_truncate_history(purge_iter_t *limit,
   }
 
   ut_ad(limit->trx_no <= purge_sys->view.low_limit_no());
+
+  /* 遍历回滚段. */
 
   /* Purge rollback segments in all undo tablespaces.  This may take
   some time and we do not want an undo DDL to attempt an x_lock during
@@ -1619,6 +1637,7 @@ static void trx_purge_truncate_history(purge_iter_t *limit,
     undo_space->rsegs()->s_lock();
 
     for (auto rseg : *undo_space->rsegs()) {
+      /* 开始 truncate rollback segments. */
       trx_purge_truncate_rseg_history(rseg, limit);
     }
     undo_space->rsegs()->s_unlock();
@@ -1704,6 +1723,7 @@ static void trx_purge_rseg_get_next_history_log(
   ibool del_marks;
   mtr_t mtr;
 
+  /* 回滚段加锁. */
   rseg->latch();
 
   ut_a(rseg->last_page_no != FIL_NULL);
@@ -1715,6 +1735,7 @@ static void trx_purge_rseg_get_next_history_log(
 
   mtr_start(&mtr);
 
+  /* 当前 undo log segment 的 header page. */
   undo_page = trx_undo_page_get_s_latched(
       page_id_t(rseg->space_id, rseg->last_page_no), rseg->page_size, &mtr);
 
@@ -1724,12 +1745,16 @@ static void trx_purge_rseg_get_next_history_log(
 
   (*n_pages_handled)++;
 
+  /* 获取当前 TRX_UNDO_HISTORY_NODE 记录的下一个 undo log segment.
+   * 因为 TRX_UNDO_HISTORY_NODE 的组织方式从后往前串联, 新加入的
+   * undo log segment 在前面，所以这里是获取 prev node. */
   prev_log_addr = trx_purge_get_log_from_hist(
       flst_get_prev_addr(log_hdr + TRX_UNDO_HISTORY_NODE, &mtr));
 
   if (prev_log_addr.page == FIL_NULL) {
     /* No logs left in the history list */
 
+    /* 重置回滚段的 last_page_no. */
     rseg->last_page_no = FIL_NULL;
 
     mtr_commit(&mtr);
@@ -1772,6 +1797,7 @@ static void trx_purge_rseg_get_next_history_log(
   /* Read the trx number and del marks from the previous log header */
   mtr_start(&mtr);
 
+  /* 下一个 undo log segment 的 header. */
   log_hdr =
       trx_undo_page_get_s_latched(page_id_t(rseg->space_id, prev_log_addr.page),
                                   rseg->page_size, &mtr) +
@@ -1785,6 +1811,7 @@ static void trx_purge_rseg_get_next_history_log(
 
   rseg->latch();
 
+  /* 更新回滚段 Purge 相关的信息. */
   rseg->last_page_no = prev_log_addr.page;
   rseg->last_offset = prev_log_addr.boffset;
   rseg->last_trx_no = trx_no;
@@ -1800,6 +1827,7 @@ static void trx_purge_rseg_get_next_history_log(
 
   mutex_enter(&purge_sys->pq_mutex);
 
+  /* 重新放入 Purge 队列. */
   purge_sys->purge_queue->push(elem);
 
   mutex_exit(&purge_sys->pq_mutex);
@@ -1827,6 +1855,7 @@ static void trx_purge_read_undo_rec(trx_purge_t *purge_sys,
 
     mtr_start(&mtr);
 
+    /* 获取第一个 undo record. */
     undo_rec = trx_undo_get_first_rec(
         &modifier_trx_id, purge_sys->rseg->space_id, page_size,
         purge_sys->hdr_page_no, purge_sys->hdr_offset, RW_S_LATCH, &mtr);
@@ -1837,6 +1866,7 @@ static void trx_purge_read_undo_rec(trx_purge_t *purge_sys,
       undo_rseg_space = purge_sys->rseg->space_id;
       page_no = page_get_page_no(page_align(undo_rec));
     } else {
+      /* 不存在 undo record. */
       offset = 0;
       undo_no = 0;
       undo_rseg_space = SPACE_UNKNOWN;
@@ -1844,12 +1874,14 @@ static void trx_purge_read_undo_rec(trx_purge_t *purge_sys,
 
     mtr_commit(&mtr);
   } else {
+    /* 无须 puge. */
     offset = 0;
     undo_no = 0;
     undo_rseg_space = SPACE_UNKNOWN;
     modifier_trx_id = 0;
   }
 
+  /* 更新 purge_sys. */
   purge_sys->offset = offset;
   purge_sys->page_no = page_no;
   purge_sys->iter.undo_no = undo_no;
@@ -1932,10 +1964,13 @@ static trx_undo_rec_t *trx_purge_get_next_rec(
     /* Try first to find the next record which requires a purge
     operation from the same page of the same undo log */
 
+    /* 尝试获取下一个 undo record. */
     next_rec = trx_undo_page_get_next_rec(rec2, purge_sys->hdr_page_no,
                                           purge_sys->hdr_offset);
 
     if (next_rec == nullptr) {
+      /* 当前 undo page 已经迭代完成, 需要从下一个 undo page 开始
+       * 查找. */
       rec2 = trx_undo_get_next_rec(rec2, purge_sys->hdr_page_no,
                                    purge_sys->hdr_offset, &mtr);
       break;
@@ -1962,12 +1997,14 @@ static trx_undo_rec_t *trx_purge_get_next_rec(
   }
 
   if (rec2 == nullptr) {
+    /* 代表当前的 undo log segment 已经 purge 完成. */
     mtr_commit(&mtr);
 
     trx_purge_rseg_get_next_history_log(purge_sys->rseg, n_pages_handled);
 
     /* Look for the next undo log and record to purge */
 
+    /* 寻找下一个 undo log 进行 purge. */
     trx_purge_choose_next_log();
 
     mtr_start(&mtr);
@@ -1978,6 +2015,7 @@ static trx_undo_rec_t *trx_purge_get_next_rec(
   } else {
     page = page_align(rec2);
 
+    /* 更新 purge_sys 信息. */
     purge_sys->offset = rec2 - page;
     purge_sys->page_no = page_get_page_no(page);
     purge_sys->iter.undo_no = trx_undo_rec_get_undo_no(rec2);
@@ -1985,6 +2023,7 @@ static trx_undo_rec_t *trx_purge_get_next_rec(
 
     if (undo_page != page) {
       /* We advance to a new page of the undo log: */
+      /* 切到了下一个 Page. */
       (*n_pages_handled)++;
     }
   }
@@ -2011,6 +2050,7 @@ static MY_ATTRIBUTE((warn_unused_result))
         mem_heap_t *heap)       /*!< in: memory heap where copied */
 {
   if (!purge_sys->next_stored) {
+    /* 选择待 purge 的回滚段. */
     trx_purge_choose_next_log();
 
     if (!purge_sys->next_stored) {
@@ -2020,6 +2060,8 @@ static MY_ATTRIBUTE((warn_unused_result))
   }
 
   if (purge_sys->iter.trx_no >= purge_sys->view.low_limit_no()) {
+    /* 对于 trx_no 超过了 purge_sys->view.low_limit_no() 的事务是
+     * 不能进行 purge 的. */
     return nullptr;
   }
 

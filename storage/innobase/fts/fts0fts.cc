@@ -3023,6 +3023,7 @@ static void fts_add(fts_trx_table_t *ftt, fts_trx_row_t *row) {
 
 /** Do commit-phase steps necessary for the deletion of a row.
  @return DB_SUCCESS or error code */
+/* 全文索引删除字段. */
 static MY_ATTRIBUTE((warn_unused_result)) dberr_t
     fts_delete(fts_trx_table_t *ftt, /*!< in: FTS trx table */
                fts_trx_row_t *row)   /*!< in: row */
@@ -3032,6 +3033,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   dberr_t error = DB_SUCCESS;
   doc_id_t write_doc_id;
   dict_table_t *table = ftt->table;
+  /* 待删除字段的 doc_id. */
   doc_id_t doc_id = row->doc_id;
   trx_t *trx = ftt->fts_trx->trx;
   pars_info_t *info = pars_info_create();
@@ -3075,6 +3077,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   }
 
   /* Note the deleted document for OPTIMIZE to purge. */
+  /* 将待删除的 doc_id 插入 FTS_*_DELETED 表中. */
   if (error == DB_SUCCESS) {
     char table_name[MAX_FULL_NAME_LEN];
 
@@ -3120,6 +3123,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
 
   ut_a(row->state == FTS_MODIFY);
 
+  /* 全文索引的修改是先删除，再重新插入的方式. */
   error = fts_delete(ftt, row);
 
   if (error == DB_SUCCESS) {

@@ -166,23 +166,27 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_remove_clust_if_poss_lo
   log_free_check();
   mtr_start(&mtr);
 
+  /* 尝试定位到这个主键索引的 record. */
   if (!row_purge_reposition_pcur(mode, node, &mtr)) {
     /* The record was already removed. */
     goto func_exit;
   }
 
+  /* 获取 record. */
   rec = btr_pcur_get_rec(&node->pcur);
 
   offsets = rec_get_offsets(rec, index, offsets_, ULINT_UNDEFINED, &heap);
 
   if (node->roll_ptr != row_get_rec_roll_ptr(rec, index, offsets)) {
     /* Someone else has modified the record later: do not remove */
+    /* 因为 roll_ptr 无法对应, 所以无法做 purge 操作. */
     goto func_exit;
   }
 
   ut_ad(rec_get_deleted_flag(rec, rec_offs_comp(offsets)));
 
   if (mode == BTR_MODIFY_LEAF) {
+    /* 尝试乐观删除. */
     success =
         btr_cur_optimistic_delete(btr_pcur_get_btr_cur(&node->pcur), 0, &mtr);
   } else {
@@ -199,6 +203,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_remove_clust_if_poss_lo
       }
     });
 
+    /* 悲观删除. */
     btr_cur_pessimistic_delete(&err, FALSE, btr_pcur_get_btr_cur(&node->pcur),
                                0, false, node->trx_id, node->undo_no,
                                node->rec_type, &mtr, &node->pcur);
@@ -241,7 +246,9 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_remove_clust_if_poss(
     return (true);
   }
 
+  /* 假如删除失败后, 需要进行数次重试. */
   for (ulint n_tries = 0; n_tries < BTR_CUR_RETRY_DELETE_N_TIMES; n_tries++) {
+    /* 悲观删除 mode 为(BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE). */
     if (row_purge_remove_clust_if_poss_low(
             node, BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE)) {
       return (true);
@@ -655,7 +662,9 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_del_mark(
 
   heap = mem_heap_create(1024);
 
+  /* 先清理主键索引, 再清理二级索引. */
   while (node->index != nullptr) {
+    /* 迭代二级索引. */
     /* skip corrupted secondary index */
     dict_table_skip_corrupt_index(node->index);
 
@@ -666,6 +675,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_del_mark(
     }
 
     if (node->index->type != DICT_FTS) {
+      /* 非全文索引. */
       if (node->index->is_multi_value()) {
         row_purge_remove_multi_sec_if_poss(node, heap, false);
       } else {
@@ -677,11 +687,13 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_del_mark(
       mem_heap_empty(heap);
     }
 
+    /* 迭代至下一个索引. */
     node->index = node->index->next();
   }
 
   mem_heap_free(heap);
 
+  /* 清理聚簇索引. */
   return (row_purge_remove_clust_if_poss(node));
 }
 
@@ -1093,6 +1105,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_record_func(
 
   switch (node->rec_type) {
     case TRX_UNDO_DEL_MARK_REC:
+      /* 针对标记删除的 record. */
       purged = row_purge_del_mark(node);
       if (!purged) {
         break;
@@ -1105,6 +1118,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_record_func(
       }
       /* fall through */
     case TRX_UNDO_UPD_EXIST_REC:
+      /* 针对修改的 record. */
       row_purge_upd_exist_or_extern(thr, node, undo_rec);
       MONITOR_INC(MONITOR_N_UPD_EXIST_EXTERN);
       break;
@@ -1239,6 +1253,7 @@ que_thr_t *row_purge_step(que_thr_t *thr) {
     node->roll_ptr = rec.roll_ptr;
     node->modifier_trx_id = rec.modifier_trx_id;
 
+    /* 对 record 进行 purge 操作. */
     row_purge(node, rec.undo_rec, thr);
 
     if (node->recs->empty()) {

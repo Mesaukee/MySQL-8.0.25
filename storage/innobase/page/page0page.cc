@@ -1309,15 +1309,19 @@ void page_dir_split_slot(page_t *page, page_zip_des_t *page_zip,
   ut_ad(!page_zip || page_is_comp(page));
   ut_ad(slot_no > 0);
 
+  /* 获取第 n 个 slot. */
   slot = page_dir_get_nth_slot(page, slot_no);
 
+  /* 获取该 slot 有多少 record. */
   n_owned = page_dir_slot_get_n_owned(slot);
   ut_ad(n_owned == PAGE_DIR_SLOT_MAX_N_OWNED + 1);
 
   /* 1. We loop to find a record approximately in the middle of the
   records owned by the slot. */
 
+  /* 前一个 slot. */
   prev_slot = page_dir_get_nth_slot(page, slot_no - 1);
+  /* 前一个 slot 对应的 recordd. */
   rec = (rec_t *)page_dir_slot_get_rec(prev_slot);
 
   for (i = 0; i < n_owned / 2; i++) {
@@ -1329,6 +1333,7 @@ void page_dir_split_slot(page_t *page, page_zip_des_t *page_zip,
   /* 2. We add one directory slot immediately below the slot to be
   split. */
 
+  /* 在前置 slot 中插入一个新的 slot. */
   page_dir_add_slot(page, page_zip, slot_no - 1);
 
   /* The added slot is now number slot_no, and the old slot is
@@ -1339,6 +1344,9 @@ void page_dir_split_slot(page_t *page, page_zip_des_t *page_zip,
 
   /* 3. We store the appropriate values to the new slot. */
 
+  /* 更新插入的 slot 信息. */
+
+  /* dir slot 指向某个 record 在 page 中 offset. */
   page_dir_slot_set_rec(new_slot, rec);
   page_dir_slot_set_n_owned(new_slot, page_zip, n_owned / 2);
 

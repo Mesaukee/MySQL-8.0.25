@@ -7246,6 +7246,7 @@ dberr_t os_aio_func(IORequest &type, AIO_mode aio_mode, const char *name,
   ut_ad((n & 0xFFFFFFFFUL) == n);
 #endif /* WIN_ASYNC_IO */
 
+  /* 对于同步 IO 直接走 os_file_read_func()/os_file_write_func(). */
   if (aio_mode == AIO_mode::SYNC
 #ifdef WIN_ASYNC_IO
       && !srv_use_native_aio
@@ -7265,17 +7266,23 @@ dberr_t os_aio_func(IORequest &type, AIO_mode aio_mode, const char *name,
     and os_file_write_func() */
 
     if (type.is_read()) {
+      /* 同步读. */
       return (os_file_read_func(type, name, file.m_file, buf, offset, n));
     }
 
     ut_ad(type.is_write());
+    /* 同步写. */
     return (os_file_write_func(type, name, file.m_file, buf, offset, n));
   }
 
 try_again:
 
+  /* 异步读写路径. */
+
+  /* 根据读写类型获取对应的 AIO handler. */
   auto array = AIO::select_slot_array(type, read_only, aio_mode);
 
+  /* 获取空闲的 slot. */
   auto slot =
       array->reserve_slot(type, m1, m2, file, name, buf, offset, n, e_block);
 
@@ -7293,6 +7300,7 @@ try_again:
       }
 #endif /* WIN_ASYNC_IO */
     } else if (type.is_wake()) {
+      /* 唤醒对应 slot 的 worker 线程. */
       AIO::wake_simulated_handler_thread(
           AIO::get_segment_no_from_slot(array, slot));
     }
@@ -7310,6 +7318,7 @@ try_again:
 #endif /* WIN_ASYNC_IO */
 
     } else if (type.is_wake()) {
+      /* 唤醒对应 slot 的 worker 线程. */
       AIO::wake_simulated_handler_thread(
           AIO::get_segment_no_from_slot(array, slot));
     }

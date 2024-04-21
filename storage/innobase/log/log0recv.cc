@@ -995,6 +995,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
 
   log_header_creator[(sizeof log_header_creator) - 1] = 0;
 
+  /* 检查 log 格式. */
   switch (log.format) {
     case 0:
       ib::error(ER_IB_MSG_1265) << "Unsupported redo log format (" << log.format
@@ -1983,6 +1984,7 @@ static byte *recv_parse_or_apply_log_rec_body(
         ut_a(!page ||
              (ibool) !!page_is_comp(page) == dict_table_is_comp(index->table));
 
+        /* 回放 insert 操作. */
         ptr = page_cur_parse_insert_rec(FALSE, ptr, end_ptr, block, index, mtr);
       }
 
@@ -3253,6 +3255,7 @@ static bool recv_sys_add_to_parsing_buf(const byte *log_block,
   ut_ad(start_offset <= end_offset);
 
   if (start_offset < end_offset) {
+    /* 拷贝至 recv_sys->buf. */
     memcpy(recv_sys->buf + recv_sys->len, log_block + start_offset,
            end_offset - start_offset);
 
@@ -3313,6 +3316,7 @@ bool meb_scan_log_recs(
 
     ulint expected_no = log_block_convert_lsn_to_no(scanned_lsn);
 
+    /* 校验 log block no. */
     if (no != expected_no) {
       /* Garbage or an incompletely written log block.
 
@@ -3326,6 +3330,7 @@ bool meb_scan_log_recs(
       break;
     }
 
+    /* 校验 checksum. */
     if (!log_block_checksum_is_ok(log_block)) {
       uint32_t checksum1 = log_block_get_checksum(log_block);
       uint32_t checksum2 = log_block_calc_checksum(log_block);
@@ -3355,6 +3360,7 @@ bool meb_scan_log_recs(
       }
     }
 
+    /* 读取当前 redo log block 的数据长度. */
     ulint data_len = log_block_get_data_len(log_block);
 
     if (scanned_lsn + data_len > recv_sys->scanned_lsn &&
@@ -3499,9 +3505,13 @@ bool meb_scan_log_recs(
   if (more_data && !recv_sys->found_corrupt_log) {
     /* Try to parse more log records */
 
+    /* parse redo log 并添加至 hash table. */
     recv_parse_log_recs(checkpoint_lsn);
 
 #ifndef UNIV_HOTBACKUP
+    /* 假如 hash table 超过了 max_memory, 需要进行 apply.
+     * max_memory 的设定是 Buffer Pool 的大小, 因为当前处于 recovery
+     * 状态, 所以暂时借用 Buffer Pool 的内存. */
     if (recv_heap_used() > max_memory) {
       recv_apply_hashed_log_recs(log, false);
     }
@@ -3686,6 +3696,7 @@ static void recv_recovery_begin(log_t &log, lsn_t *contiguous_lsn) {
       UNIV_PAGE_SIZE * (buf_pool_get_n_pages() -
                         (recv_n_pool_free_frames * srv_buf_pool_instances));
 
+  /* 向下取整 512 bytes. */
   *contiguous_lsn =
       ut_uint64_align_down(*contiguous_lsn, OS_FILE_LOG_BLOCK_SIZE);
 
@@ -3696,8 +3707,10 @@ static void recv_recovery_begin(log_t &log, lsn_t *contiguous_lsn) {
   bool finished = false;
 
   while (!finished) {
+    /* 每次读 2048 bytes. */
     lsn_t end_lsn = start_lsn + RECV_SCAN_SIZE;
 
+    /* 直接使用 log.buf 读 redo log, 长度为 RECV_SCAN_SIZE. */
     recv_read_log_seg(log, log.buf, start_lsn, end_lsn);
 
     finished = recv_scan_log_recs(log, max_mem, log.buf, RECV_SCAN_SIZE,
@@ -3914,6 +3927,8 @@ dberr_t recv_recovery_from_checkpoint_start(log_t &log, lsn_t flush_lsn) {
 
   contiguous_lsn = checkpoint_lsn;
 
+  /* 从 checkpoint 文件记录的 lsn 开始进行 recovery.
+   * 流程: 读到 recv_sys->buf ==> Hash Table ==> (如果超过了 max_memory, 会提前进行apply). */
   recv_recovery_begin(log, &contiguous_lsn);
 
   lsn_t recovered_lsn;
@@ -3965,6 +3980,7 @@ dberr_t recv_recovery_from_checkpoint_start(log_t &log, lsn_t flush_lsn) {
 
   byte *log_buf_block = log.buf + start_lsn % log.buf_size;
 
+  /* 将 recovery 的最后一个 block 内容拷贝至 log_sys->buf, 目的是进行 log_start(). */
   std::memcpy(log_buf_block, recv_sys->last_block, OS_FILE_LOG_BLOCK_SIZE);
 
   if (recv_sys->last_block_first_rec_group != 0 &&
@@ -4009,6 +4025,7 @@ dberr_t recv_recovery_from_checkpoint_start(log_t &log, lsn_t flush_lsn) {
   checkpoint info on disk certain */
 
   if (!srv_read_only_mode) {
+    /* 完成一次 checkpoint. */
     log_files_write_checkpoint(log, checkpoint_lsn);
   }
 

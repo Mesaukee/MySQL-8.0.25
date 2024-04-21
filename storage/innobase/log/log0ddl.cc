@@ -975,6 +975,7 @@ dberr_t Log_DDL::write_delete_space_log(trx_t *trx, const dict_table_t *table,
   DBUG_INJECT_CRASH("ddl_log_crash_before_delete_space_log",
                     crash_before_delete_space_log_counter++);
 
+  /* is_drop 代表是否为 drop tablespace. */
   if (is_drop) {
     err = insert_delete_space_log(trx, id, thread_id, space_id, file_path,
                                   dict_locked);
@@ -985,6 +986,8 @@ dberr_t Log_DDL::write_delete_space_log(trx_t *trx, const dict_table_t *table,
     DBUG_INJECT_CRASH("ddl_log_crash_after_delete_space_log",
                       crash_after_delete_space_log_counter++);
   } else {
+    /* 写入一条 ddl log, insert_delete_space_log() 的第一个参数为 nullptr, 即使用
+     * 子事务完成 commit. */
     err = insert_delete_space_log(nullptr, id, thread_id, space_id, file_path,
                                   dict_locked);
     if (err != DB_SUCCESS) {
@@ -997,6 +1000,8 @@ dberr_t Log_DDL::write_delete_space_log(trx_t *trx, const dict_table_t *table,
     DBUG_EXECUTE_IF("DDL_Log_remove_inject_error_2",
                     srv_inject_too_many_concurrent_trxs = true;);
 
+    /* 使用 ddl 事务来删除子事务删除的 ddl log, 假如 ddl 事务提交成功, 子事务会被
+     * 成功删除, 否则 recover 时用来 replay. */
     err = delete_by_id(trx, id, dict_locked);
     ut_ad(err == DB_SUCCESS || err == DB_TOO_MANY_CONCURRENT_TRXS);
 

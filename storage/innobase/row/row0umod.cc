@@ -1204,6 +1204,7 @@ static void row_undo_mod_parse_undo_rec(undo_node_t *node, THD *thd,
   bool dummy_extern;
   type_cmpl_t type_cmpl;
 
+  /* 解析参数. */
   ptr = trx_undo_rec_get_pars(node->undo_rec, &type, &cmpl_info, &dummy_extern,
                               &undo_no, &table_id, type_cmpl);
   node->rec_type = type;
@@ -1213,6 +1214,7 @@ static void row_undo_mod_parse_undo_rec(undo_node_t *node, THD *thd,
   took here. Notably, there cannot be a race between ROLLBACK and
   DROP TEMPORARY TABLE, because temporary tables are
   private to a single connection. */
+  /* 获取对应 dict_table_t. */
   node->table = dd_table_open_on_id(table_id, thd, mdl, false, true);
 
   if (node->table == nullptr) {
@@ -1276,6 +1278,7 @@ dberr_t row_undo_mod(undo_node_t *node, /*!< in: row undo node */
 
   THD *thd = dd_thd_for_undo(node->trx);
 
+  /* 解析 undo record. */
   row_undo_mod_parse_undo_rec(node, thd,
                               dd_mdl_for_undo(node->trx) ? &mdl : nullptr);
 
@@ -1297,6 +1300,7 @@ dberr_t row_undo_mod(undo_node_t *node, /*!< in: row undo node */
   dict_table_skip_corrupt_index(node->index);
 
   switch (node->rec_type) {
+    /* 根据 undo record 类型回滚操作. */
     case TRX_UNDO_UPD_EXIST_REC:
       err = row_undo_mod_upd_exist_sec(node, thr);
       break;

@@ -478,6 +478,7 @@ struct trx_sys_t {
                                 transactions that have not yet been
                                 started in InnoDB. */
 
+  /* 活跃事务 ID. */
   trx_ids_t rw_trx_ids; /*!< Array of Read write transaction IDs
                         for MVCC snapshot. A ReadView would take
                         a snapshot of these transactions whose

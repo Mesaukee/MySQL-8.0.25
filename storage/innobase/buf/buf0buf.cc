@@ -1032,12 +1032,15 @@ static buf_chunk_t *buf_chunk_init(
   it is bigger, we may allocate more blocks than requested. */
 
   frame = (byte *)ut_align(chunk->mem, UNIV_PAGE_SIZE);
+  /* 计算单个 chunk 可以分配多少个数据 page. */
   chunk->size = chunk->mem_pfx.m_size / UNIV_PAGE_SIZE - (frame != chunk->mem);
 
   /* Subtract the space needed for block descriptors. */
   {
     ulint size = chunk->size;
 
+    /* 为 blocks 预留空间, 所以 chunk 内的布局空间是前半部分存放 block,
+     * 后半部分存放 frame. */
     while (frame < (byte *)(chunk->blocks + size)) {
       frame += UNIV_PAGE_SIZE;
       size--;
@@ -1052,6 +1055,7 @@ static buf_chunk_t *buf_chunk_init(
 
   block = chunk->blocks;
 
+  /* 初始化 block. */
   for (i = chunk->size; i--;) {
     buf_block_init(buf_pool, block, frame);
     UNIV_MEM_INVALID(block->frame, UNIV_PAGE_SIZE);
@@ -1310,6 +1314,7 @@ static void buf_pool_create(buf_pool_t *buf_pool, ulint buf_pool_size,
     ut_a(srv_n_page_hash_locks != 0);
     ut_a(srv_n_page_hash_locks <= MAX_PAGE_HASH_LOCKS);
 
+    /* 初始化 page hash. */
     buf_pool->page_hash =
         ib_create(2 * buf_pool->curr_size, LATCH_ID_HASH_TABLE_RW_LOCK,
                   srv_n_page_hash_locks, MEM_HEAP_FOR_PAGE_HASH);
@@ -1553,6 +1558,7 @@ static bool buf_page_realloc(buf_pool_t *buf_pool, buf_block_t *block) {
 
   ut_ad(mutex_own(&buf_pool->LRU_list_mutex));
 
+  /* 从 free_list 中获取一个空闲 page. */
   new_block = buf_LRU_get_free_only(buf_pool);
 
   if (new_block == nullptr) {
@@ -1786,6 +1792,7 @@ static bool buf_pool_withdraw_blocks(buf_pool_t *buf_pool) {
     }
 
     /* reserve free_list length */
+    /* 回收 LRU list. */
     if (UT_LIST_GET_LEN(buf_pool->withdraw) < buf_pool->withdraw_target) {
       ulint scan_depth;
       ulint n_flushed = 0;
@@ -1814,6 +1821,7 @@ static bool buf_pool_withdraw_blocks(buf_pool_t *buf_pool) {
 
     mutex_enter(&buf_pool->LRU_list_mutex);
     buf_page_t *bpage;
+    /* 释放 lru_list 的 page, 因为 lru_list 的 page 在 chunk 的物理位置是乱序的, 所以需要依次判断. */
     bpage = UT_LIST_GET_FIRST(buf_pool->LRU);
     while (bpage != nullptr) {
       BPageMutex *block_mutex;
@@ -2044,6 +2052,7 @@ static void buf_pool_resize() {
 
   /* Assumes that buf_resize_thread has already issued the necessary
   memory barrier to read srv_buf_pool_size and srv_buf_pool_old_size */
+  /* 通过 innodb_buffer_pool_size_update 更新 srv_buf_pool_size 后重新计算. */
   new_instance_size = srv_buf_pool_size / srv_buf_pool_instances;
   new_instance_size /= UNIV_PAGE_SIZE;
 
@@ -2068,9 +2077,11 @@ static void buf_pool_resize() {
     buf_flush_list_mutex_exit(buf_pool);
 #endif
 
+    /* 新的 instance 大小. */
     buf_pool->curr_size = new_instance_size;
 
     ut_ad(srv_buf_pool_chunk_unit % UNIV_PAGE_SIZE == 0);
+    /* 新的 chunk 大小. */
     buf_pool->n_chunks_new =
         new_instance_size * UNIV_PAGE_SIZE / srv_buf_pool_chunk_unit;
 
@@ -2099,13 +2110,17 @@ static void buf_pool_resize() {
   /* set withdraw target */
   for (ulint i = 0; i < srv_buf_pool_instances; i++) {
     buf_pool = buf_pool_from_array(i);
+    /* 对于缩减 Buffer Pool 的大小的情况. */
     if (buf_pool->curr_size < buf_pool->old_size) {
       ulint withdraw_target = 0;
 
+      /* 新的 chunk 偏移。 */
       const buf_chunk_t *chunk = buf_pool->chunks + buf_pool->n_chunks_new;
+      /* 旧的 chunk 偏移。 */
       const buf_chunk_t *echunk = buf_pool->chunks + buf_pool->n_chunks;
 
       while (chunk < echunk) {
+        /* 需要缩减的 Page 数量. */
         withdraw_target += chunk->size;
         ++chunk;
       }
@@ -2128,6 +2143,11 @@ withdraw_retry:
   for (ulint i = 0; i < srv_buf_pool_instances; i++) {
     buf_pool = buf_pool_from_array(i);
     if (buf_pool->curr_size < buf_pool->old_size) {
+      /* 根据计算的新旧 chunk 偏移区间判断一个 Page 是否需要被回收. */
+      /* 1. 从 free_list 中释放属于回收区间的 Page.
+       * 2. 进行 LRU_list 刷脏, 将 LRU_list 中属于回收区间的 Page 进行
+       * 重分配(buf_page_realloc(): 从 free_list 中重新申请 Page 并且将释放的
+       * Page 插入 withdraw list).*/
       should_retry_withdraw |= buf_pool_withdraw_blocks(buf_pool);
     }
   }
@@ -2250,6 +2270,7 @@ withdraw_retry:
   buf_chunk_map_reg = UT_NEW_NOKEY(buf_pool_chunk_map_t());
 
   /* add/delete chunks */
+  /* 申请/释放 chunk 内存. */
   for (ulint i = 0; i < srv_buf_pool_instances; ++i) {
     buf_pool_t *buf_pool = buf_pool_from_array(i);
     buf_chunk_t *chunk;
@@ -2522,6 +2543,7 @@ void buf_resize_thread() {
       continue;
     }
 
+    /* Buffer Pool 的 resize 操作. */
     buf_pool_resize();
   }
 }
@@ -4094,6 +4116,7 @@ buf_block_t *Buf_fetch<T>::single_page() {
   Counter::inc(m_buf_pool->stat.m_n_page_gets, m_page_id.page_no());
 
   for (;;) {
+    /* 真正的读取 Page: 使用 Buf_fetch_normal::get(). */
     if (static_cast<T *>(this)->get(block) == DB_NOT_FOUND) {
       return (nullptr);
     }
@@ -4218,6 +4241,7 @@ buf_block_t *Buf_fetch<T>::single_page() {
     block->made_dirty_with_no_latch = m_dirty_with_no_latch;
   }
 
+  /* 为 Page 加锁. */
   mtr_add_page(block);
 
   if (m_mode != Page_fetch::PEEK_IF_IN_POOL && m_mode != Page_fetch::SCAN &&
@@ -4660,6 +4684,7 @@ static void buf_page_init(buf_pool_t *buf_pool, const page_id_t &page_id,
   ut_a(block->page.id == page_id);
   block->page.size.copy_from(page_size);
 
+  /* 插入 page hash. */
   HASH_INSERT(buf_page_t, hash, buf_pool->page_hash, page_id.fold(),
               &block->page);
 
@@ -4807,6 +4832,7 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
     read is completed.  The x-lock is cleared by the
     io-handler thread. */
 
+    /* Page 加 X 锁. */
     rw_lock_x_lock_gen(&block->lock, BUF_IO_READ);
 
     rw_lock_x_unlock(hash_lock);
@@ -5726,6 +5752,7 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
       debugging! */
 
       if (uncompressed) {
+        /* 对于读请求释放 Page 的 X 锁. */
         rw_lock_x_unlock_gen(&((buf_block_t *)bpage)->lock, BUF_IO_READ);
       }
 
@@ -5744,6 +5771,7 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
       buf_flush_write_complete(bpage);
 
       if (uncompressed) {
+        /* 对于写请求释放 Page 的 SX 锁. */
         rw_lock_sx_unlock_gen(&((buf_block_t *)bpage)->lock, BUF_IO_WRITE);
       }
 
@@ -5755,11 +5783,16 @@ bool buf_page_io_complete(buf_page_t *bpage, bool evict) {
       * BUF_FLUSH_LRU: always evict
       * BUF_FLUSH_SINGLE_PAGE: eviction preference is passed
       by the caller explicitly. */
+      /* 需要注意 LRU list 的 evict 策略:
+       * 1. 针对 BUF_FLUSH_LIST 无需 evict.
+       * 2. 针对 BUF_FLUSH_LRU 的刷脏需要 evict page.
+       * 3. 针对 BUF_FLUSH_SINGLE_PAGE 需要调用者自行判断. */
       if (flush_type == BUF_FLUSH_LRU) {
         evict = true;
         ut_ad(has_LRU_mutex);
       }
 
+      /* 针对 LRU list 的刷脏操作, 需要将 Page 从 LRU list 摘除. */
       if (evict && buf_LRU_free_page(bpage, true)) {
         has_LRU_mutex = false;
       } else {
