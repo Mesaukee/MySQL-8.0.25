@@ -1558,8 +1558,9 @@ rec_t *page_cur_direct_insert_rec_low(rec_t *current_rec, dict_index_t *index,
 
   /* 7. It remains to update the owner record. */
   {
-    /* 查找插入的 record 的 owner record, 目的是存放在 owner record 的 dir slot 中,
-     * 在 dir slot 中指向的 record 的 REC_OLD_N_OWNED 均不为 0. */
+    /* 查找插入的 record 的 owner record, 目的是存放在对应 owner record 的 dir slot 中,
+     * 在 dir slot 中指向的 record 的 REC_OLD_N_OWNED 均不为0, 而普通的 record 的
+     * REC_OLD_N_OWNED 则为0. */
     rec_t *owner_rec = page_rec_find_owner_rec(insert_rec);
     ulint n_owned;
     if (page_is_comp(page)) {

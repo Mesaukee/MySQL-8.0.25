@@ -5351,11 +5351,14 @@ dberr_t lock_rec_insert_check_and_lock(
     "predicate lock" to protect the "range" */
     ut_ad(!dict_index_is_spatial(index));
 
+    /*  查看逻辑顺序的下一条 record 是否存在锁. */
     lock = lock_rec_get_first(lock_sys->rec_hash, block, heap_no);
 
     if (lock == nullptr) {
+      /* 下一条 record 不存在锁. */
       *inherit = false;
     } else {
+      /* 下一条 record 存在锁. */
       *inherit = true;
 
       /* If another transaction has an explicit lock request which locks
@@ -5368,12 +5371,15 @@ dberr_t lock_rec_insert_check_and_lock(
       had to wait for their insert. Both had waiting gap type lock requests
       on the successor, which produced an unnecessary deadlock. */
 
+      /* 插入意向锁. */
       const ulint type_mode = LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION;
 
+      /* 判断是否锁住了这个 GAP. */
       const lock_t *wait_for =
           lock_rec_other_has_conflicting(type_mode, block, heap_no, trx);
 
       if (wait_for != nullptr) {
+        /* 发生冲突的情况下, 进入等待队列. */
         RecLock rec_lock(thr, index, block, heap_no, type_mode);
 
         trx_mutex_enter(trx);

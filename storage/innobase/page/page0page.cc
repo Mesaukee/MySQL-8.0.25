@@ -1321,7 +1321,7 @@ void page_dir_split_slot(page_t *page, page_zip_des_t *page_zip,
 
   /* 前一个 slot. */
   prev_slot = page_dir_get_nth_slot(page, slot_no - 1);
-  /* 前一个 slot 对应的 recordd. */
+  /* 前一个 slot 对应的 record. */
   rec = (rec_t *)page_dir_slot_get_rec(prev_slot);
 
   for (i = 0; i < n_owned / 2; i++) {
