@@ -527,6 +527,7 @@ static bool btr_cur_will_modify_tree(dict_index_t *index, const page_t *page,
 
       margin = rec_size;
     }
+
     /* Safe because we already have SX latch of the index tree */
     if (page_get_data_size(page) <
             margin + BTR_CUR_PAGE_COMPRESS_LIMIT(index) ||
@@ -644,22 +645,35 @@ void btr_cur_search_to_nth_level(
    * 1. 先对 dict_index_t 加 sx 锁.
    * 2. 从 root 节点进入, 一路向下遍历, 使用 RW_NO_LATCH 意为不加锁,
    * 一路遍历下来的 block 会放在 tree_blocks[] 数组中.
+   *
    * 3. 在遍历过程中会一直判断是否会发生分裂(btr_cur_will_modify_tree())
-   * 不会发生分裂的上层 block 都会释放.
+   * 不会发生分裂的上层 block 最后都会释放.
+   *
    * 4. 到达 level 1 层时, 将 tree_blocks[] 中保留的 block 进行加锁操作:
    * root page 加 sx 锁, 其余待 SMO 的 page 加 X 锁.
-   * 5. 继续遍历至 level 0 层, 即 leaf level:
-   * 调用 btr_cur_latch_leaves() 根据 BTR_MODIFY_TREE 模式将左右 page 全部加上 X 锁.
    *
-   * BTR_MODIFY_LEAF:
+   * 5. 继续遍历至 level 0 层, 即 leaf level:
+   * 调用 btr_cur_latch_leaves() 根据 BTR_MODIFY_TREE 将左右 page 全部都加上 X 锁,
+   * 加锁顺序是先[左 page], [目标 page], [右 page]. */
+
+   /* BTR_MODIFY_LEAF:
    * 遍历过程:
    * 1. 先对 dict_index_t 加 s 锁.
+   *
    * 2. 从 root 节点进入, 一路向下遍历, search 过程中的 non-leaf page 加 s 锁,
    * leaf page 加 x 锁, 一路遍历下来的 block 会放在 tree_blocks[] 数组中.
+   *
    * 3. (height == 0) 到达叶子层后, 开始释放 lock:
    * 释放 dict_index_t 的 s 锁.
-   * 释放所有上层除了 root page 以外其他 page 的 s 锁, 保留 root page 的 s 锁.
-   */
+   * 释放所有上层除了 root page 以外其他 page 的 s 锁, 保留 root page 的 s 锁. */
+
+   /* BTR_SEARCH_LEAF:
+    * 遍历过程:
+    * 1. 先对 dict_index_t 加 s 锁.
+    *
+    * 2. 从 root 节点进入, 一路向下遍历.
+    * 3. 对 leaf page 加 s 锁. */
+
   page_t *page = nullptr; /* remove warning */
   buf_block_t *block;
   ulint height;
@@ -838,6 +852,8 @@ void btr_cur_search_to_nth_level(
       if (lock_intention == BTR_INTENTION_DELETE &&
           trx_sys->rseg_history_len.load() > BTR_CUR_FINE_HISTORY_LENGTH &&
           buf_get_n_pending_read_ios()) {
+        /* 针对 BTR_LATCH_FOR_DELETE 的 mode 并且 history list 超过了
+         * BTR_CUR_FINE_HISTORY_LENGTH, 直接为 index 加 x 锁. */
         mtr_x_lock(dict_index_get_lock(index), mtr);
       } else if (dict_index_is_spatial(index) &&
                  lock_intention <= BTR_INTENTION_BOTH) {
@@ -881,7 +897,8 @@ void btr_cur_search_to_nth_level(
           BTR_ALREADY_S_LATCHED */
           ut_ad(latch_mode != BTR_SEARCH_TREE);
 
-          /* BTR_MODIFY_LEAF 对 index 加 s 锁.*/
+          /* BTR_MODIFY_LEAF 对 index 加 s 锁.
+           * BTR_SEARCH_LEAF 对 index 加 s 锁. */
           mtr_s_lock(dict_index_get_lock(index), mtr);
         } else {
           /* BTR_MODIFY_EXTERNAL needs to be excluded */
@@ -894,7 +911,7 @@ void btr_cur_search_to_nth_level(
       }
   }
 
-  /* 根据 latch_mode(BTR_SEARCH_LEAF BTR_MODIFY_TREE ...) 来判断 root page 的加锁类型,
+  /* 根据 latch_mode (BTR_SEARCH_LEAF/BTR_MODIFY_TREE/...) 来判断 root page 的加锁类型,
    * 仅在 b+ tree 的层级只有一层时使用. */
   root_leaf_rw_latch = btr_cur_latch_for_root_leaf(latch_mode);
 
@@ -923,8 +940,15 @@ void btr_cur_search_to_nth_level(
   B-tree. These let us end up in the right B-tree leaf. In that leaf
   we use the original search mode. */
 
+  /* PAGE_CUR_G: > 查询，查询第一个大于 dtuple 的 rec_t
+   * PAGE_CUR_GE: >=，> 查询，查询第一个大于等于 dtuple 的 rec_t
+   * PAGE_CUR_L: < 查询，查询最后一个小于 dtuple 的 rec_t
+   * PAGE_CUR_LE: <= 查询，查询最后一个小于等于 dtuple 的 rec_t
+   */
+
   /* 当使用 PAGE_CUR_GE 来搜索 record 的时候，在非叶子
    * 节点使用的 PAGE_CUR_L;
+   *
    * 当使用 PAGE_CUR_G 来搜索 record 的时候，在非叶子
    * 节点使用的 PAGE_CUR_LE. */
   switch (mode) {
@@ -954,9 +978,14 @@ search_loop:
   rw_latch = RW_NO_LATCH;
   rtree_parent_modified = false;
 
+  /* height 代表当前 search 过程中所在的层级. */
   if (height != 0) {
-    /* height 代表当前 search 过程中所在的层级. */
+    /* non-leaf page 层级的加锁判断. */
+
     /* BTR_MODIFY_LEAF 对于 non-leaf page 使用 s 锁. */
+    /* BTR_MODIFY_TREE 对于 non-leaf page 使用 RW_NO_LATCH, 意为不加锁. */
+    /* BTR_SERACH_LEAF 对于 non-leaf page 使用 s 锁. */
+
     /* We are about to fetch the root or a non-leaf page. */
     if ((latch_mode != BTR_MODIFY_TREE || height == level) &&
         !retrying_for_search_prev) {
@@ -972,7 +1001,11 @@ search_loop:
       }
     }
   } else if (latch_mode <= BTR_MODIFY_LEAF) {
-    /* BTR_MODIFY_LEAF 对于 leaf page 使用 x 锁. */
+    /* leaf page 层级的加锁判断.*/
+
+    /* BTR_MODIFY_LEAF 对于 leaf page 使用 x 锁.
+     * BTR_SEARCH_LEAF 对于 leaf page 使用 s 锁. */
+
     rw_latch = latch_mode;
 
     if (btr_op != BTR_NO_OP &&
@@ -986,6 +1019,7 @@ search_loop:
   }
 
 retry_page_get:
+  /* 开始 search. */
   ut_ad(n_blocks < BTR_MAX_LEVELS);
   tree_savepoints[n_blocks] = mtr_set_savepoint(mtr);
   block =
@@ -1166,8 +1200,11 @@ retry_page_get:
   }
 
   if (height == 0) {
+    /* 到达 leaf node 层. */
+
     /* We are in the leaf node. */
     if (rw_latch == RW_NO_LATCH) {
+      /* 1. BTR_MODIFY_TREE 在这里将左右 page 加 x 锁. */
       latch_leaves = btr_cur_latch_leaves(block, page_id, page_size, latch_mode,
                                           cursor, mtr);
     }
@@ -1182,6 +1219,8 @@ retry_page_get:
           /* Release the tree s-latch */
           /* NOTE: BTR_MODIFY_EXTERNAL
           needs to keep tree sx-latch */
+
+          /* BTR_MODIFY_LEAF 在这里释放 index 的 s lock. */
           mtr_release_s_latch_at_savepoint(mtr, savepoint,
                                            dict_index_get_lock(index));
         }
@@ -1285,14 +1324,14 @@ retry_page_get:
     We only need the byte prefix comparison for the purpose
     of updating the adaptive hash index. */
 
-    /* 在 leaf page level 的 page 中检索. */
+    /* 在打开 btr_search_enabled 的情况下 leaf page level 的 page 中检索. */
     page_cur_search_with_match_bytes(block, index, tuple, page_mode, &up_match,
                                      &up_bytes, &low_match, &low_bytes,
                                      page_cursor);
   } else {
     /* Search for complete index fields. */
     up_bytes = low_bytes = 0;
-    /* 在当前 non leaf page level 中 page 中检索. */
+    /* 在当前 non-leaf/leaf page(disable ahi) 层级中的 page 中检索. */
     page_cur_search_with_match(block, index, tuple, page_mode, &up_match,
                                &low_match, page_cursor,
                                need_path ? cursor->rtr_info : nullptr);
@@ -1502,8 +1541,10 @@ retry_page_get:
     }
 
     if (height == level && latch_mode == BTR_MODIFY_TREE) {
-      /* BTR_MODIFY_TREE 到达目标层级. */
+      /* BTR_MODIFY_TREE 将要到达目标层级. */
+
       ut_ad(upper_rw_latch == RW_X_LATCH);
+
       /* we should sx-latch root page, if released already.
       It contains seg_header. */
       if (n_releases > 0) {
@@ -2130,6 +2171,8 @@ void btr_cur_open_at_index_side_func(bool from_left, dict_index_t *index,
     */
     if (latch_mode == BTR_MODIFY_TREE &&
         btr_cur_need_opposite_intention(page, lock_intention, node_ptr)) {
+      /* 待 search 的 record 是 page 上最左或者最右的, 可能导致父节点需要插入新的
+       * node ptr, 所以修改 lock_intention. */
       ut_ad(upper_rw_latch == RW_X_LATCH);
       /* release all blocks */
       for (; n_releases <= n_blocks; n_releases++) {

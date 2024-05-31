@@ -90,15 +90,18 @@ void btr_pcur_t::store_position(mtr_t *mtr) {
   }
 
   if (page_rec_is_supremum_low(offs)) {
+    /* pcur 指向的是一个 supremum record, 则保存前一个 record. */
     rec = page_rec_get_prev(rec);
 
     m_rel_pos = BTR_PCUR_AFTER;
 
   } else if (page_rec_is_infimum_low(offs)) {
+    /* pcur 指向的是一个 infimum record, 则保存后一个 record. */
     rec = page_rec_get_next(rec);
 
     m_rel_pos = BTR_PCUR_BEFORE;
   } else {
+    /* pcur 指向的是一个 user record, 直接保存. */
     m_rel_pos = BTR_PCUR_ON;
   }
 
@@ -324,6 +327,9 @@ void btr_pcur_t::move_to_next_page(mtr_t *mtr) {
 
   auto block = get_block();
 
+  /* mode:
+   * BTR_SEARCH_LEAF -> RW_S_LATCH.
+   * BTR_MODIFY_LEAF -> RW_X_LATCH. */
   auto next_block =
       btr_block_get(page_id_t(block->page.id.space(), next_page_no),
                     block->page.size, mode, get_btr_cur()->index, mtr);
@@ -345,6 +351,7 @@ void btr_pcur_t::move_to_next_page(mtr_t *mtr) {
   }
 #endif /* UNIV_BTR_DEBUG */
 
+  /*  释放当前 page 的 latch. */
   btr_leaf_page_release(get_block(), mode, mtr);
 
   page_cur_set_before_first(next_block, get_page_cur());

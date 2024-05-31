@@ -522,7 +522,6 @@ void page_cur_search_with_match(const buf_block_t *block,
     }
   }
 
-  /* 获取数据 page 内的 dir slot. */
   slot = page_dir_get_nth_slot(page, low);
   low_rec = page_dir_slot_get_rec(slot);
   slot = page_dir_get_nth_slot(page, up);
@@ -531,7 +530,7 @@ void page_cur_search_with_match(const buf_block_t *block,
   /* Perform linear search until the upper and lower records come to
   distance 1 of each other. */
 
-  /* 在 dir slot 中迭代查找. */
+  /* 在 directory slot 中迭代查找. */
   while (page_rec_get_next_const(low_rec) != up_rec) {
     mid_rec = page_rec_get_next_const(low_rec);
 
@@ -712,7 +711,7 @@ void page_cur_search_with_match_bytes(
   slots come to the distance 1 of each other */
 
   while (up - low > 1) {
-    /* 二分查找, 取中间的 dir slot. */
+    /* 二分查找, 取中间的 directory slot. */
     mid = (low + up) / 2;
     slot = page_dir_get_nth_slot(page, mid);
     mid_rec = page_dir_slot_get_rec(slot);
@@ -765,7 +764,7 @@ void page_cur_search_with_match_bytes(
   /* Perform linear search until the upper and lower records come to
   distance 1 of each other. */
 
-  /* 在两个相邻的 dir slot 中迭代查找. */
+  /* 在两个相邻的 directory slot 中迭代查找. */
   while (page_rec_get_next_const(low_rec) != up_rec) {
     mid_rec = page_rec_get_next_const(low_rec);
 
