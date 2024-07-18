@@ -2445,7 +2445,7 @@ and return. don't execute actual insert. */
 
   if (!index->allow_duplicates && n_uniq &&
       (cursor->up_match >= n_uniq || cursor->low_match >= n_uniq)) {
-    /* 插入过程中发现相等的 record 需要进行锁检查的操作. */
+    /* Insert 插入过程中发现相等的 record 需要进行锁检查的操作. */
     if (flags == (BTR_CREATE_FLAG | BTR_NO_LOCKING_FLAG | BTR_NO_UNDO_LOG_FLAG |
                   BTR_KEEP_SYS_FLAG)) {
       /* Set no locks when applying log

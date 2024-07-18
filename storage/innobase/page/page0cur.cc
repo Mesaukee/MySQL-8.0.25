@@ -722,17 +722,20 @@ void page_cur_search_with_match_bytes(
     offsets = rec_get_offsets(mid_rec, index, offsets_,
                               dtuple_get_n_fields_cmp(tuple), &heap);
 
+    /* 比较 mid_rec 和 search_tuple. */
     cmp = cmp_dtuple_rec_with_match_bytes(tuple, mid_rec, index, offsets,
                                           &cur_matched_fields,
                                           &cur_matched_bytes);
 
     if (cmp > 0) {
+      /* search_tuple 大于 mid_rec. */
     low_slot_match:
       low = mid;
       low_matched_fields = cur_matched_fields;
       low_matched_bytes = cur_matched_bytes;
 
     } else if (cmp) {
+      /* search_tuple 小于 mid_rec. */
 #ifdef PAGE_CUR_LE_OR_EXTENDS
       if (mode == PAGE_CUR_LE_OR_EXTENDS &&
           page_cur_rec_field_extends(tuple, mid_rec, offsets,
@@ -746,6 +749,7 @@ void page_cur_search_with_match_bytes(
       up_matched_bytes = cur_matched_bytes;
 
     } else if (mode == PAGE_CUR_G || mode == PAGE_CUR_LE
+      /* search_tuple 和 mid_rec 相等: PAGE_CUR_G or PAGE_CUR_LE. */
 #ifdef PAGE_CUR_LE_OR_EXTENDS
                || mode == PAGE_CUR_LE_OR_EXTENDS
 #endif /* PAGE_CUR_LE_OR_EXTENDS */
@@ -795,7 +799,7 @@ void page_cur_search_with_match_bytes(
       }
 #endif /* PAGE_CUR_LE_OR_EXTENDS */
     up_rec_match:
-      up_rec = mid_rec; /*  大于 search_tuple 的 record*/
+      up_rec = mid_rec; /*  大于 search_tuple 的 record. */
       up_matched_fields = cur_matched_fields;
       up_matched_bytes = cur_matched_bytes;
     } else if (mode == PAGE_CUR_G || mode == PAGE_CUR_LE

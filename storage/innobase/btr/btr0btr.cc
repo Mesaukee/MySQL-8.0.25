@@ -1618,6 +1618,7 @@ rec_t *btr_root_raise_and_insert(
   } else {
     node_ptr = dict_index_build_node_ptr(index, rec, new_page_no, *heap, level);
   }
+
   /* The node pointer must be marked as the predefined minimum record,
   as there is no lower alphabetical limit to records in the leftmost
   node of a level: */
