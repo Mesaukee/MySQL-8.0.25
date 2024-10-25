@@ -166,7 +166,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_remove_clust_if_poss_lo
   log_free_check();
   mtr_start(&mtr);
 
-  /* 尝试定位到这个主键索引的 record. */
+  /* 尝试定位到这个主键索引的 record, 锁住 Page. */
   if (!row_purge_reposition_pcur(mode, node, &mtr)) {
     /* The record was already removed. */
     goto func_exit;
@@ -203,7 +203,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_remove_clust_if_poss_lo
       }
     });
 
-    /* 悲观删除. */
+    /* 进入悲观删除. */
     btr_cur_pessimistic_delete(&err, FALSE, btr_pcur_get_btr_cur(&node->pcur),
                                0, false, node->trx_id, node->undo_no,
                                node->rec_type, &mtr, &node->pcur);
@@ -246,7 +246,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_remove_clust_if_poss(
     return (true);
   }
 
-  /* 假如删除失败后, 需要进行数次重试. */
+  /* 假如乐观删除失败后, 需要进行数次重试. */
   for (ulint n_tries = 0; n_tries < BTR_CUR_RETRY_DELETE_N_TIMES; n_tries++) {
     /* 悲观删除 mode 为(BTR_MODIFY_TREE | BTR_LATCH_FOR_DELETE). */
     if (row_purge_remove_clust_if_poss_low(
@@ -662,7 +662,7 @@ static MY_ATTRIBUTE((warn_unused_result)) bool row_purge_del_mark(
 
   heap = mem_heap_create(1024);
 
-  /* 先清理主键索引, 再清理二级索引. */
+  /* 先清理二级索引, 再清理主键索引. */
   while (node->index != nullptr) {
     /* 迭代二级索引. */
     /* skip corrupted secondary index */

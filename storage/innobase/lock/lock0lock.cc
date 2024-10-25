@@ -1748,6 +1748,7 @@ static dberr_t lock_rec_lock(bool impl, select_mode sel_mode, ulint mode,
   ut_ad(!impl || ((mode & LOCK_REC_NOT_GAP) == LOCK_REC_NOT_GAP));
   /* We try a simplified and faster subroutine for the most
   common cases */
+
   /* 尝试申请 record lock. */
   switch (lock_rec_lock_fast(impl, mode, block, heap_no, index, thr)) {
     case LOCK_REC_SUCCESS:

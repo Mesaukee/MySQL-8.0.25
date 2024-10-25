@@ -880,6 +880,7 @@ void btr_cur_search_to_nth_level(
         the parent */
         upper_rw_latch = RW_X_LATCH;
       } else {
+        /* 在 search 过程中的 Page 不加锁, 因为 BTR_CONT_MODIFY_TREE 是在悲观修改时, 递归修改上层的 node ptr. */
         upper_rw_latch = RW_NO_LATCH;
       }
       break;
@@ -904,7 +905,7 @@ void btr_cur_search_to_nth_level(
           /* BTR_MODIFY_EXTERNAL needs to be excluded */
           mtr_sx_lock(dict_index_get_lock(index), mtr);
         }
-        /* search 过程中的 page 加 s 锁. */
+        /* 在 search 过程中的 Page 加 s 锁. */
         upper_rw_latch = RW_S_LATCH;
       } else {
         upper_rw_latch = RW_NO_LATCH;
@@ -3638,11 +3639,13 @@ dberr_t btr_cur_optimistic_update(
     externally stored in rec or update, and there is enough space
     on the compressed page to log the update. */
 
+    /* 可以原地更新. */
     return (btr_cur_update_in_place(flags, cursor, *offsets, update, cmpl_info,
                                     thr, trx_id, mtr));
   }
 
   if (rec_offs_any_extern(*offsets)) {
+    /* BLOB 字段使用悲观 update. */
   any_extern:
     /* Externally stored fields are treated in pessimistic
     update */
@@ -4666,7 +4669,7 @@ ibool btr_cur_optimistic_delete_func(
       btr_cur_can_delete_without_compress(cursor, rec_offs_size(offsets), mtr);
 
   if (no_compress_needed) {
-    /* 针对 b+ tree 无需 SMO 的情况. */
+    /* 针对 B+ tree 无需 SMO 的情况. */
     page_t *page = buf_block_get_frame(block);
     page_zip_des_t *page_zip = buf_block_get_page_zip(block);
 
@@ -4710,7 +4713,7 @@ ibool btr_cur_optimistic_delete_func(
   } else {
     /* prefetch siblings of the leaf for the pessimistic
     operation. */
-    /* 乐观删除失败, 预先获取相邻的 page. */
+    /* 乐观删除失败, 需要做 SMO 操作, 预先获取相邻的 page. */
     btr_cur_prefetch_siblings(block);
   }
 
@@ -4822,7 +4825,7 @@ ibool btr_cur_pessimistic_delete(dberr_t *err, ibool has_reserved_extents,
     /* If there is only one record, drop the whole page in
     btr_discard_page, if this is not the root page */
 
-    /* 需要删除 Page. */
+    /* 只剩下一个 Record, 需要删除 Page. */
     btr_discard_page(cursor, mtr);
 
     ret = TRUE;
@@ -4887,7 +4890,7 @@ ibool btr_cur_pessimistic_delete(dberr_t *err, ibool has_reserved_extents,
       so that it is equal to the new leftmost node pointer
       on the page */
 
-      /* 在父节点层更新 node ptr, 也通过悲观删除(btr_cur_pessimistic_delete()). */
+      /* 在父节点层更新 node ptr, 也通过悲观删除(btr_cur_pessimistic_delete()) 递归删除. */
       btr_node_ptr_delete(index, block, mtr);
 
       /* 使用 next_rec 重新构建一个 node ptr. */

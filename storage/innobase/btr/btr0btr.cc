@@ -2230,6 +2230,7 @@ static rec_t *btr_insert_into_right_sibling(uint32_t flags, btr_cur_t *cursor,
 
   bool is_leaf = page_is_leaf(next_page);
 
+  /* 获取父节点 node ptr. */
   btr_page_get_father(cursor->index, next_block, mtr, &next_father_cursor);
 
   page_cur_search(next_block, cursor->index, tuple, PAGE_CUR_LE,
@@ -2377,6 +2378,8 @@ func_start:
   ut_ad(!page_is_empty(page));
 
   /* try to insert to the next page if possible before split */
+
+  /* 如果插入点在 Page 的最后, 则尝试分裂. */
   rec =
       btr_insert_into_right_sibling(flags, cursor, offsets, *heap, tuple, mtr);
 
@@ -3124,17 +3127,19 @@ ibool btr_compress(
   /* Decide the page to which we try to merge and which will inherit
   the locks */
 
-  /*  首先尝试与左节点 merge. */
+  /* 首先尝试与左节点 merge. */
   is_left = btr_can_merge_with_page(cursor, left_page_no, &merge_block, mtr);
 
   DBUG_EXECUTE_IF("ib_always_merge_right", is_left = FALSE;);
 retry:
   if (!is_left &&
-      /*  尝试与右节点 merge. */
+      /* 尝试与右节点 merge. */
       !btr_can_merge_with_page(cursor, right_page_no, &merge_block, mtr)) {
     if (!merge_block) {
       merge_page = nullptr;
     }
+
+    /* merge 存在失败的情况, 比如右边不存在 Page 或者 右边 Page 已经无法放下该 record. */
     goto err_exit;
   }
 
@@ -3174,6 +3179,7 @@ retry:
 
   /* Move records to the merge page */
   if (is_left) {
+    /* 与左边的 Page 合并. */
     btr_cur_t cursor2;
     rtr_mbr_t new_mbr;
     ulint *offsets2 = nullptr;
@@ -3203,6 +3209,7 @@ retry:
                                 &new_mbr, merge_block, block, index);
     }
 
+    /* 拷贝 records. */
     rec_t *orig_pred = page_copy_rec_list_start(
         merge_block, block, page_get_supremum_rec(page), index, mtr);
 
@@ -3213,6 +3220,7 @@ retry:
     btr_search_drop_page_hash_index(block);
 
     /* Remove the page from the level list */
+    /* 更新左右 Page 指针. */
     btr_level_list_remove(space, page_size, page, index, mtr);
 
     if (dict_index_is_spatial(index)) {
@@ -3246,7 +3254,9 @@ retry:
       lock_prdt_page_free_from_discard(block, lock_sys->prdt_page_hash);
       lock_rec_free_all_from_discard_page(block);
     } else {
+      /* 删除 node pointer. */
       btr_node_ptr_delete(index, block, mtr);
+
       if (!dict_table_is_locking_disabled(index->table)) {
         lock_update_merge_left(merge_block, orig_pred, block);
       }
@@ -3256,6 +3266,7 @@ retry:
       nth_rec += page_rec_get_n_recs_before(orig_pred);
     }
   } else {
+    /* 与右边的 Page 合并. */
     rec_t *orig_succ;
     ibool compressed;
     dberr_t err;
@@ -3299,6 +3310,7 @@ retry:
       memset(merge_page + FIL_PAGE_PREV, 0xff, 4);
     }
 
+    /* 拷贝 records. */
     orig_succ = page_copy_rec_list_end(
         merge_block, block, page_get_infimum_rec(page), cursor->index, mtr);
 
@@ -3329,6 +3341,7 @@ retry:
 #endif /* UNIV_BTR_DEBUG */
 
     /* Remove the page from the level list */
+    /* 更新左右 Page 指针. */
     btr_level_list_remove(space, page_size, page, index, mtr);
 
     ut_ad(btr_node_ptr_get_child_page_no(btr_cur_get_rec(&father_cursor),
@@ -3336,6 +3349,7 @@ retry:
 
     /* Replace the address of the old child node (= page) with the
     address of the merge page to the right */
+    /* 更新父节点的 node ptr, 将被合并的 Page 的 node ptr 更新, 将 right page 的 node ptr 删除. */
     btr_node_ptr_set_child_page_no(btr_cur_get_rec(&father_cursor),
                                    btr_cur_get_page_zip(&father_cursor),
                                    offsets, right_page_no, mtr);
@@ -3380,6 +3394,7 @@ retry:
       lock_prdt_page_free_from_discard(block, lock_sys->prdt_page_hash);
       lock_rec_free_all_from_discard_page(block);
     } else {
+      /* 将 right page 的 node ptr 删除. */
       compressed = btr_cur_pessimistic_delete(
           &err, TRUE, &cursor2, BTR_CREATE_FLAG, false, 0, 0, 0, mtr);
       ut_a(err == DB_SUCCESS);
@@ -3629,6 +3644,7 @@ void btr_discard_page(btr_cur_t *cursor, /*!< in: cursor on the page to discard:
     ut_d(parent_is_different = page_rec_is_supremum(
              page_rec_get_next(btr_cur_get_rec(&parent_cursor))));
   } else {
+    /* 该 Page 单独为一层. */
     btr_discard_only_page_on_level(index, block, mtr);
 
     return;
