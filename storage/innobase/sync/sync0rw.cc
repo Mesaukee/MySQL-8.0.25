@@ -465,7 +465,10 @@ bool rw_lock_x_lock_low(
     const char *file_name, /*!< in: file name where lock requested */
     ulint line)            /*!< in: line where requested */
 {
+  /* 判断当前 lock_word 是否大于 X_LOCK_HALF_DECR. */
   if (rw_lock_lock_word_decr(lock, X_LOCK_DECR, X_LOCK_HALF_DECR)) {
+    /* 1. 如果当前不存在 S 锁或者 SX 锁或者其他 X 锁. */
+
     /* lock->recursive == true implies that the lock->writer_thread is the
     current writer. As we are going to write our own thread id in that field it
     must be the case that the current writer_thread value is not the current
@@ -475,6 +478,10 @@ bool rw_lock_x_lock_low(
     /* Decrement occurred: we are writer or next-writer. */
     rw_lock_set_writer_id_and_recursion_flag(lock, !pass);
 
+    /* 2. 如果这个锁已经被其他线程加了数量小于 X_LOCK_HALF_DECR 个 S 锁,
+     * 步骤 1 也是满足的, 但是步骤 2 需要进入等待逻辑直到所有的 S 锁释放,
+     * 即使当前读写锁上已经有其他的 S 锁, 但是为了防止 X 锁饥饿状态,
+     * 所以将 X 预先分配给申请线程. */
     rw_lock_x_lock_wait(lock, pass, 0, file_name, line);
 
   } else {
@@ -494,20 +501,27 @@ bool rw_lock_x_lock_low(
 
         /* Wait for any the other S-locks to be
         released. */
+        /* 之前已经持有了 SX 锁, 由 SX 锁升级为 X 锁. */
         rw_lock_x_lock_wait(lock, pass, -X_LOCK_HALF_DECR, file_name, line);
 
       } else {
         /* At least one X lock by this thread already
         exists. Add another. */
+        /* 之前已经持有了 X 锁. */
         if (lock->lock_word == 0 || lock->lock_word == -X_LOCK_HALF_DECR) {
+          /* 1. 上一次直接申请了 X 锁, 所以 lock_word 为 0.
+           * 2. 上一次是 SX 锁升级为 X 锁, 所以 lock_word 为-X_LOCK_HALF_DECR.
+           * 3. 所以 X 锁的 lock_word 减去 X_LOCK_DECR. */
           lock->lock_word -= X_LOCK_DECR;
         } else {
           ut_ad(lock->lock_word <= -X_LOCK_DECR);
+          /* 之前已经持有了两个 X 锁, 所以当前的 lock_word 递减 1 即可. */
           --lock->lock_word;
         }
       }
     } else {
       /* Another thread locked before us */
+      /* 申请失败, 返回. */
       return false;
     }
   }
@@ -518,6 +532,7 @@ bool rw_lock_x_lock_low(
   ut_ad(line <= std::numeric_limits<decltype(lock->last_x_line)>::max());
   lock->last_x_line = line;
 
+  /* 申请成功, 返回. */
   return true;
 }
 
@@ -531,6 +546,10 @@ bool rw_lock_sx_lock_low(
     ulint line)            /*!< in: line where requested */
 {
   if (rw_lock_lock_word_decr(lock, X_LOCK_HALF_DECR, X_LOCK_HALF_DECR)) {
+    /* 1. 判断当前的 lock_word 是否大于 X_LOCK_HALF_DECR.
+     * 2. 如果条件 1 满足就使用 CAS 减去 X_LOCK_DECR, 因为 SX 锁和 S 锁兼容,
+     * 所以无需等待 lock_word 的值为 0. */
+
     /* lock->recursive == true implies that the lock->writer_thread is the
     current writer. As we are going to write our own thread id in that field it
     must be the case that the current writer_thread value is not the current
@@ -540,6 +559,7 @@ bool rw_lock_sx_lock_low(
     /* Decrement occurred: we are the SX lock owner. */
     rw_lock_set_writer_id_and_recursion_flag(lock, !pass);
 
+    /* 设置 sx_recursive 的标记为 1. */
     lock->sx_recursive = 1;
 
   } else {
@@ -573,6 +593,7 @@ bool rw_lock_sx_lock_low(
         ut_ad((lock->lock_word == 0) ||
               ((lock->lock_word <= -X_LOCK_DECR) &&
                (lock->lock_word > -(X_LOCK_DECR + X_LOCK_HALF_DECR))));
+        /* 之前已经成功申请了一个 X 锁, 所以 lock_word -= X_LOCK_HALF_DECR. */
         lock->lock_word -= X_LOCK_HALF_DECR;
       }
     } else {
