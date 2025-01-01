@@ -349,6 +349,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   if (err != DB_SUCCESS) {
     return (err);
   }
+
   if (mode != BTR_MODIFY_TREE) {
     ut_ad((mode & ~BTR_ALREADY_S_LATCHED) == BTR_MODIFY_LEAF);
 
@@ -2483,6 +2484,7 @@ and return. don't execute actual insert. */
     mtr.commit();
     goto func_exit;
   }
+
   /* Note: Allowing duplicates would qualify for modification of
   an existing record as the new entry is exactly same as old entry.
   Avoid this check if allow duplicates is enabled. */

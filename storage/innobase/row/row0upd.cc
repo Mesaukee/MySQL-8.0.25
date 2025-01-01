@@ -2820,10 +2820,12 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t row_upd_clust_rec(
   record to update */
 
   if (node->cmpl_info & UPD_NODE_NO_SIZE_CHANGE) {
+    /* 对于 Update 后长度不变的 Record, 调用原地修改. */
     err = btr_cur_update_in_place(flags | BTR_NO_LOCKING_FLAG, btr_cur, offsets,
                                   node->update, node->cmpl_info, thr,
                                   thr_get_trx(thr)->id, mtr);
   } else {
+    /* 尝试乐观更新. */
     err = btr_cur_optimistic_update(
         flags | BTR_NO_LOCKING_FLAG, btr_cur, &offsets, offsets_heap,
         node->update, node->cmpl_info, thr, thr_get_trx(thr)->id, mtr);
@@ -2872,6 +2874,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t row_upd_clust_rec(
     heap = mem_heap_create(1024);
   }
 
+  /* 乐观更新失败, 则选择悲观更新. */
   err = btr_cur_pessimistic_update(
       flags | BTR_NO_LOCKING_FLAG | BTR_KEEP_POS_FLAG, btr_cur, &offsets,
       offsets_heap, heap, &big_rec, node->update, node->cmpl_info, thr, trx_id,

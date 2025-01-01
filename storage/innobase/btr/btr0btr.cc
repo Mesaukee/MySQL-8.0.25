@@ -2212,6 +2212,7 @@ static rec_t *btr_insert_into_right_sibling(uint32_t flags, btr_cur_t *cursor,
 
   if (next_page_no == FIL_NULL ||
       !page_rec_is_supremum(page_rec_get_next(btr_cur_get_rec(cursor)))) {
+    /* 如果右边 Page 不存在. */
     return (nullptr);
   }
 
@@ -2230,9 +2231,10 @@ static rec_t *btr_insert_into_right_sibling(uint32_t flags, btr_cur_t *cursor,
 
   bool is_leaf = page_is_leaf(next_page);
 
-  /* 获取父节点 node ptr. */
+  /* 获取右边 Page 父节点 node ptr. */
   btr_page_get_father(cursor->index, next_block, mtr, &next_father_cursor);
 
+  /* 定位到右边 Page 需要插入的位置. */
   page_cur_search(next_block, cursor->index, tuple, PAGE_CUR_LE,
                   &next_page_cursor);
 
@@ -2243,6 +2245,7 @@ static rec_t *btr_insert_into_right_sibling(uint32_t flags, btr_cur_t *cursor,
     lock_update_split_left(next_block, block);
   }
 
+  /* 插入 Record. */
   rec = page_cur_tuple_insert(&next_page_cursor, tuple, cursor->index, offsets,
                               &heap, mtr);
 
@@ -2269,7 +2272,6 @@ static rec_t *btr_insert_into_right_sibling(uint32_t flags, btr_cur_t *cursor,
   ut_ad(page_rec_get_next(page_get_infimum_rec(next_page)) == rec);
 
   /* We have to change the parent node pointer */
-
   compressed = btr_cur_pessimistic_delete(&err, TRUE, &next_father_cursor,
                                           BTR_CREATE_FLAG, false, 0, 0, 0, mtr);
 
@@ -2379,7 +2381,7 @@ func_start:
 
   /* try to insert to the next page if possible before split */
 
-  /* 如果插入点在 Page 的最后, 则尝试分裂. */
+  /* 直接尝试插入到下一个 Page. */
   rec =
       btr_insert_into_right_sibling(flags, cursor, offsets, *heap, tuple, mtr);
 
@@ -3072,6 +3074,7 @@ ibool btr_compress(
 
   MONITOR_INC(MONITOR_INDEX_MERGE_ATTEMPTS);
 
+  /* 获取左右 Page. */
   left_page_no = btr_page_get_prev(page, mtr);
   right_page_no = btr_page_get_next(page, mtr);
 
@@ -4638,6 +4641,7 @@ static bool btr_can_merge_with_page(
   DBUG_TRACE;
 
   if (page_no == FIL_NULL) {
+    /* Page 不存在. */
     *merge_block = nullptr;
     return false;
   }

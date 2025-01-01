@@ -329,7 +329,8 @@ void btr_pcur_t::move_to_next_page(mtr_t *mtr) {
 
   /* mode:
    * BTR_SEARCH_LEAF -> RW_S_LATCH.
-   * BTR_MODIFY_LEAF -> RW_X_LATCH. */
+   * BTR_MODIFY_LEAF -> RW_X_LATCH.
+   */
   auto next_block =
       btr_block_get(page_id_t(block->page.id.space(), next_page_no),
                     block->page.size, mode, get_btr_cur()->index, mtr);

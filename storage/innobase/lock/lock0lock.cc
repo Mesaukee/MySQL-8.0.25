@@ -5568,12 +5568,14 @@ dberr_t lock_clust_rec_modify_check_and_lock(
   /* If a transaction has no explicit x-lock set on the record, set one
   for it */
 
+  /* 将隐式锁转换为显式锁. */
   lock_rec_convert_impl_to_expl(block, rec, index, offsets);
 
   {
     locksys::Shard_latch_guard guard{UT_LOCATION_HERE, block->get_page_id()};
     ut_ad(lock_table_has(thr_get_trx(thr), index->table, LOCK_IX));
 
+    /* 写操作加 X lock. */
     err = lock_rec_lock(true, SELECT_ORDINARY, LOCK_X | LOCK_REC_NOT_GAP, block,
                         heap_no, index, thr);
 
