@@ -473,6 +473,7 @@ dberr_t btr_store_big_rec_extern_fields(trx_t *trx, btr_pcur_t *pcur,
     rec_offs_make_valid(rec, index, offsets);
     ut_ad(rec_offs_validate(rec, index, offsets));
 
+    /* 获取 BLOB reference. */
     byte *field_ref = btr_rec_get_field_ref(rec, offsets, field_no);
 
     ref_t blobref(field_ref);
@@ -544,6 +545,8 @@ dberr_t btr_store_big_rec_extern_fields(trx_t *trx, btr_pcur_t *pcur,
       }
 
     } else {
+      /* 非压缩 BLOB 插入. */
+
       /* Uncompressed LOB */
       bool do_insert = true;
 
@@ -563,7 +566,6 @@ dberr_t btr_store_big_rec_extern_fields(trx_t *trx, btr_pcur_t *pcur,
             default:
               ut_error;
           }
-
         } else {
           /* This is to inform the purge thread that
           the older version LOB in this update operation
@@ -585,6 +587,7 @@ dberr_t btr_store_big_rec_extern_fields(trx_t *trx, btr_pcur_t *pcur,
             /* Update the LOB reference
             stored in upd_field_t */
             dfield_t *new_val = &uf->new_val;
+
             if (dfield_is_ext(new_val)) {
               byte *field_ref = new_val->blobref();
               blobref.copy(field_ref);
@@ -610,6 +613,7 @@ dberr_t btr_store_big_rec_extern_fields(trx_t *trx, btr_pcur_t *pcur,
     ut_ad(!lobref.is_null());
 #endif /* UNIV_DEBUG */
   }
+
   return (error);
 
   {
@@ -622,13 +626,16 @@ dberr_t btr_store_big_rec_extern_fields(trx_t *trx, btr_pcur_t *pcur,
       zblob_writer.write();
       error = zblob_writer.finish();
     }
+
     return (error);
   }
+
   {
   insert_noindex:
     /* Insert the uncompressed LOB without LOB index. */
     Inserter blob_writer(&ctx);
     error = blob_writer.write();
+
     return (error);
   }
 }

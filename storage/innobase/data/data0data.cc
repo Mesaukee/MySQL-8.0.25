@@ -440,6 +440,7 @@ big_rec_t *dtuple_convert_big_rec(dict_index_t *index, upd_t *upd,
     local_len = BTR_EXTERN_FIELD_REF_SIZE + DICT_ANTELOPE_MAX_INDEX_COL_LEN;
   } else {
     /* new-format table: do not store any BLOB prefix locally */
+    /* 20 byte 的 reference. */
     local_len = BTR_EXTERN_FIELD_REF_SIZE;
   }
 

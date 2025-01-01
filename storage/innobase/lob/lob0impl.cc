@@ -965,6 +965,7 @@ dberr_t insert(InsertContext *ctx, trx_t *trx, ref_t &ref,
   DBUG_LOG("lob", PrintBuffer(ptr, len));
   ut_ad(ref.validate(ctx->get_mtr()));
 
+  /* 第一个 page. */
   first_page_t first(mtr, index);
   buf_block_t *first_block = first.alloc(mtr, ctx->is_bulk());
 
@@ -974,6 +975,7 @@ dberr_t insert(InsertContext *ctx, trx_t *trx, ref_t &ref,
   }
 
   first.set_last_trx_id(trxid);
+  /* 设置 OFFSET_LOB_VERSION = 1. */
   first.init_lob_version();
 
   page_no_t first_page_no = first.get_page_no();
@@ -984,8 +986,10 @@ dberr_t insert(InsertContext *ctx, trx_t *trx, ref_t &ref,
 
   page_id_t first_page_id(space_id, first_page_no);
 
+  /* 获取链表的起始位置. */
   flst_base_node_t *index_list = first.index_list();
 
+  /* 写入数据. */
   ulint to_write = first.write(trxid, ptr, len);
   total_written += to_write;
   ulint remaining = len;
@@ -998,6 +1002,7 @@ dberr_t insert(InsertContext *ctx, trx_t *trx, ref_t &ref,
     allocated in the first page of LOB, it cannot be nullptr. */
     ut_ad(node != nullptr);
 
+    /* 定义一个 LOB 的 entry. */
     index_entry_t entry(node, mtr, index);
     entry.set_versions_null();
     entry.set_trx_id(trxid);
@@ -1017,6 +1022,7 @@ dberr_t insert(InsertContext *ctx, trx_t *trx, ref_t &ref,
   const ulint commit_freq = 4;
 
   while (remaining > 0) {
+    /* 开始写入剩余的 LOB 内容. */
     data_page_t data_page(mtr, index);
     buf_block_t *block = data_page.alloc(mtr, ctx->is_bulk());
 
@@ -1055,13 +1061,17 @@ dberr_t insert(InsertContext *ctx, trx_t *trx, ref_t &ref,
     ut_a(type == FIL_PAGE_TYPE_LOB_DATA);
 
     if (++nth_blob_page % commit_freq == 0) {
+      /* 4 个 Page 使用一个 mtr.  */
       ctx->check_redolog();
+
       ref.set_ref(ctx->get_field_ref(field->field_no));
+
       first.load_x(first_page_id, page_size);
     }
   }
 
   if (ret == DB_SUCCESS) {
+    /* LOB 的 reference 写入的是 sapce_id, first_page_no, version, length. */
     ref.update(space_id, first_page_no, 1, mtr);
     ref.set_length(total_written, mtr);
   }

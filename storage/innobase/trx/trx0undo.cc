@@ -1878,6 +1878,7 @@ page_t *trx_undo_set_state_at_finish(
 
   undo->state = state;
 
+  /* 在 undo log segment header 中设置事务的状态. */
   mlog_write_ulint(seg_hdr + TRX_UNDO_STATE, state, MLOG_2BYTES, mtr);
 
   return (undo_page);

@@ -349,6 +349,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
   if (err != DB_SUCCESS) {
     return (err);
   }
+
   if (mode != BTR_MODIFY_TREE) {
     ut_ad((mode & ~BTR_ALREADY_S_LATCHED) == BTR_MODIFY_LEAF);
 
@@ -2276,6 +2277,7 @@ static dberr_t row_ins_index_entry_big_rec_func(trx_t *trx,
 
   dict_disable_redo_if_temporary(index->table, &mtr);
 
+  /* 定位到插入的 record 上. */
   btr_pcur_open(index, entry, PAGE_CUR_LE, BTR_MODIFY_TREE, &pcur, &mtr);
   rec = btr_pcur_get_rec(&pcur);
   offsets = rec_get_offsets(rec, index, offsets, ULINT_UNDEFINED, heap);
@@ -2483,10 +2485,13 @@ and return. don't execute actual insert. */
     mtr.commit();
     goto func_exit;
   }
+
   /* Note: Allowing duplicates would qualify for modification of
   an existing record as the new entry is exactly same as old entry.
   Avoid this check if allow duplicates is enabled. */
   if (!index->allow_duplicates && row_ins_must_modify_rec(cursor)) {
+    /*  插入的时候发现存在相等的 record. */
+
     /* There is already an index entry with a long enough common
     prefix, we must convert the insert into a modify of an
     existing record */

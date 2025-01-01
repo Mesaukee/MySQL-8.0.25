@@ -475,7 +475,7 @@ void page_cur_search_with_match(const buf_block_t *block,
 
   while (up - low > 1) {
     mid = (low + up) / 2;
-    /* 获取中间的 slot, 并获取对应的 record. */
+    /* 获取中间的 slot, 并获取对应的 record, slot 记录的 record 在 page 的偏移 offset. */
     slot = page_dir_get_nth_slot(page, mid);
     mid_rec = page_dir_slot_get_rec(slot);
 
@@ -1464,6 +1464,7 @@ rec_t *page_cur_direct_insert_rec_low(rec_t *current_rec, dict_index_t *index,
       }
 
       free_rec = nullptr;
+      /* 更新 heap no. */
       insert_buf = page_mem_alloc_heap(page, nullptr, rec_size, &heap_no);
 
       if (insert_buf == nullptr) {

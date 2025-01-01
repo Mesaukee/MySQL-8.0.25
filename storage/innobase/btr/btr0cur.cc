@@ -486,6 +486,9 @@ static bool btr_cur_will_modify_tree(dict_index_t *index, const page_t *page,
       can be the left_most record in this page or not. */
       ulint max_nodes_deleted = 0;
 
+      /* 如果 B+ tree的层级超过了 7 层,  max_nodes_deleted 设为 64.
+       * 否则 max_nodes_deleted 设置为 2^(level-1). */
+
       /* By modifying tree operations from the under of this level,
       logically (2 ^ (level - 1)) opportunities to deleting records in maximum
       even unreally rare case. */
@@ -552,6 +555,9 @@ static bool btr_cur_will_modify_tree(dict_index_t *index, const page_t *page,
     for page directory already */
     ulint max_size = page_get_max_insert_size_after_reorganize(page, 2);
 
+    /* max_size 为 page 的剩余空间.
+     * 1. 如果剩余空间小于 BTR_CUR_PAGE_REORGANIZE_LIMIT + rec_size 即需要锁住这个 page.
+     * 2. 如果剩余空间小于 2 * rec_size, 也需要锁住这个 page. */
     if (max_size < BTR_CUR_PAGE_REORGANIZE_LIMIT + rec_size ||
         max_size < rec_size * 2) {
       return (true);
@@ -643,36 +649,43 @@ void btr_cur_search_to_nth_level(
    * BTR_MODIFY_TREE:
    * 遍历过程:
    * 1. 先对 dict_index_t 加 sx 锁.
+   *
    * 2. 从 root 节点进入, 一路向下遍历, 使用 RW_NO_LATCH 意为不加锁,
-   * 一路遍历下来的 block 会放在 tree_blocks[] 数组中.
+   * 一路遍历下来的 page 会放在 tree_blocks[] 数组中.
    *
    * 3. 在遍历过程中会一直判断是否会发生分裂(btr_cur_will_modify_tree())
-   * 不会发生分裂的上层 block 最后都会释放.
+   * 不会发生分裂的上层 page  最后都会释放.
    *
-   * 4. 到达 level 1 层时, 将 tree_blocks[] 中保留的 block 进行加锁操作:
+   * 4. 到达 level 1 层时, 将 tree_blocks[] 中保留的 page 进行加锁操作:
    * root page 加 sx 锁, 其余待 SMO 的 page 加 X 锁.
    *
    * 5. 继续遍历至 level 0 层, 即 leaf level:
    * 调用 btr_cur_latch_leaves() 根据 BTR_MODIFY_TREE 将左右 page 全部都加上 X 锁,
-   * 加锁顺序是先[左 page], [目标 page], [右 page]. */
+   * 加锁顺序是先[左 page], [目标 page], [右 page].
+   *
+   * 6. 修改过程中并不释放 dict_index_t 的锁. */
 
    /* BTR_MODIFY_LEAF:
    * 遍历过程:
    * 1. 先对 dict_index_t 加 s 锁.
    *
-   * 2. 从 root 节点进入, 一路向下遍历, search 过程中的 non-leaf page 加 s 锁,
-   * leaf page 加 x 锁, 一路遍历下来的 block 会放在 tree_blocks[] 数组中.
+   * 2. 从 root 节点进入, 一路向下遍历, search 过程中的 non-leaf page 加 s 锁.
    *
-   * 3. (height == 0) 到达叶子层后, 开始释放 lock:
-   * 释放 dict_index_t 的 s 锁.
-   * 释放所有上层除了 root page 以外其他 page 的 s 锁, 保留 root page 的 s 锁. */
+   * 3. leaf page 加 x 锁, 一路遍历下来的 page 会放在 tree_blocks[] 数组中.
+   *
+   * 4. (height == 0) 到达叶子层后, 开始释放 lock:
+   * 释放 dict_index_t 的 s 锁, 释放所有上层其他 page 的 s 锁. */
 
    /* BTR_SEARCH_LEAF:
     * 遍历过程:
     * 1. 先对 dict_index_t 加 s 锁.
     *
-    * 2. 从 root 节点进入, 一路向下遍历.
-    * 3. 对 leaf page 加 s 锁. */
+    * 2. 从 root 节点进入, 一路向下遍历, non-leaf page 使用 S 锁.
+    *
+    * 3. leaf page 加 s 锁, 一路遍历下来的 page 会放在 tree_blocks[] 数组中.
+    *
+    * 4. (height == 0) 到达叶子层后, 开始释放 lock:
+    * 释放 dict_index_t 的 s 锁, 释放所有上层其他 page 的 s 锁. */
 
   page_t *page = nullptr; /* remove warning */
   buf_block_t *block;
@@ -853,7 +866,7 @@ void btr_cur_search_to_nth_level(
           trx_sys->rseg_history_len.load() > BTR_CUR_FINE_HISTORY_LENGTH &&
           buf_get_n_pending_read_ios()) {
         /* 针对 BTR_LATCH_FOR_DELETE 的 mode 并且 history list 超过了
-         * BTR_CUR_FINE_HISTORY_LENGTH, 直接为 index 加 x 锁. */
+         * BTR_CUR_FINE_HISTORY_LENGTH, 直接为 index 加 X 锁. */
         mtr_x_lock(dict_index_get_lock(index), mtr);
       } else if (dict_index_is_spatial(index) &&
                  lock_intention <= BTR_INTENTION_BOTH) {
@@ -863,7 +876,7 @@ void btr_cur_search_to_nth_level(
 
         mtr_x_lock(dict_index_get_lock(index), mtr);
       } else {
-        /* 普通的 modify tree 为 index 加 sx 锁. */
+        /* 普通的 modify tree 为 index 加 SX 锁. */
         mtr_sx_lock(dict_index_get_lock(index), mtr);
       }
       upper_rw_latch = RW_X_LATCH;
@@ -898,14 +911,14 @@ void btr_cur_search_to_nth_level(
           BTR_ALREADY_S_LATCHED */
           ut_ad(latch_mode != BTR_SEARCH_TREE);
 
-          /* BTR_MODIFY_LEAF 对 index 加 s 锁.
-           * BTR_SEARCH_LEAF 对 index 加 s 锁. */
+          /* BTR_MODIFY_LEAF 对 index 加 S 锁.
+           * BTR_SEARCH_LEAF 对 index 加 S 锁. */
           mtr_s_lock(dict_index_get_lock(index), mtr);
         } else {
           /* BTR_MODIFY_EXTERNAL needs to be excluded */
           mtr_sx_lock(dict_index_get_lock(index), mtr);
         }
-        /* 在 search 过程中的 Page 加 s 锁. */
+        /* 在 search 过程中的 Page 加 S 锁. */
         upper_rw_latch = RW_S_LATCH;
       } else {
         upper_rw_latch = RW_NO_LATCH;
@@ -913,7 +926,7 @@ void btr_cur_search_to_nth_level(
   }
 
   /* 根据 latch_mode (BTR_SEARCH_LEAF/BTR_MODIFY_TREE/...) 来判断 root page 的加锁类型,
-   * 仅在 b+ tree 的层级只有一层时使用. */
+   * 仅在 B+ tree 的层级只有一层时使用. */
   root_leaf_rw_latch = btr_cur_latch_for_root_leaf(latch_mode);
 
   page_cursor = btr_cur_get_page_cur(cursor);
@@ -983,9 +996,9 @@ search_loop:
   if (height != 0) {
     /* non-leaf page 层级的加锁判断. */
 
-    /* BTR_MODIFY_LEAF 对于 non-leaf page 使用 s 锁. */
-    /* BTR_MODIFY_TREE 对于 non-leaf page 使用 RW_NO_LATCH, 意为不加锁. */
-    /* BTR_SERACH_LEAF 对于 non-leaf page 使用 s 锁. */
+    /* BTR_MODIFY_LEAF 对于 non-leaf page 使用 S 锁. */
+    /* BTR_MODIFY_TREE 对于 non-leaf page 使用 RW_NO_LATCH, 意为不加锁, 因为已经对 index 加了 SX 锁. */
+    /* BTR_SERACH_LEAF 对于 non-leaf page 使用 S 锁. */
 
     /* We are about to fetch the root or a non-leaf page. */
     if ((latch_mode != BTR_MODIFY_TREE || height == level) &&
@@ -1004,8 +1017,8 @@ search_loop:
   } else if (latch_mode <= BTR_MODIFY_LEAF) {
     /* leaf page 层级的加锁判断.*/
 
-    /* BTR_MODIFY_LEAF 对于 leaf page 使用 x 锁.
-     * BTR_SEARCH_LEAF 对于 leaf page 使用 s 锁. */
+    /* BTR_MODIFY_LEAF 对于 leaf page 使用 X 锁.
+     * BTR_SEARCH_LEAF 对于 leaf page 使用 S 锁. */
 
     rw_latch = latch_mode;
 
@@ -1201,11 +1214,11 @@ retry_page_get:
   }
 
   if (height == 0) {
-    /* 到达 leaf node 层. */
+    /* 将要到达 leaf node level, 开始根据 latch_mode 释放上层 page. */
 
     /* We are in the leaf node. */
     if (rw_latch == RW_NO_LATCH) {
-      /* 1. BTR_MODIFY_TREE 在这里将左右 page 加 x 锁. */
+      /* 1. BTR_MODIFY_TREE 在这里将左右 Page 和目标 Page 加 X 锁. */
       latch_leaves = btr_cur_latch_leaves(block, page_id, page_size, latch_mode,
                                           cursor, mtr);
     }
@@ -1221,7 +1234,7 @@ retry_page_get:
           /* NOTE: BTR_MODIFY_EXTERNAL
           needs to keep tree sx-latch */
 
-          /* BTR_MODIFY_LEAF 在这里释放 index 的 s lock. */
+          /* BTR_SEARCH_LEAF | BTR_MODIFY_LEAF 在这里释放 index 的 S lock. */
           mtr_release_s_latch_at_savepoint(mtr, savepoint,
                                            dict_index_get_lock(index));
         }
@@ -1244,6 +1257,7 @@ retry_page_get:
             continue;
           }
 
+          /* 将遍历 B+ tree 过程中 mtr 中保存的 Page 移除, 释放锁. */
           mtr_release_block_at_savepoint(mtr, tree_savepoints[n_releases],
                                          tree_blocks[n_releases]);
         }
@@ -1521,9 +1535,12 @@ retry_page_get:
     /* If the page might cause modify_tree,
     we should not release the parent page's lock. */
     if (!detected_same_key_root && latch_mode == BTR_MODIFY_TREE &&
+        /* 判断是否可能发生 SMO. */
         !btr_cur_will_modify_tree(index, page, lock_intention, node_ptr,
                                   node_ptr_max_size, page_size, mtr) &&
         !rtree_parent_modified) {
+
+      /* 在这层不可能发生 SMO. */
       ut_ad(upper_rw_latch == RW_X_LATCH);
       ut_ad(n_releases <= n_blocks);
 
@@ -1536,6 +1553,7 @@ retry_page_get:
         }
 
         /* release unused blocks to unpin */
+        /* BTR_MODIFY_TREE 在这里移除 B+ tree 遍历过程中保存的 Page. */
         mtr_release_block_at_savepoint(mtr, tree_savepoints[n_releases],
                                        tree_blocks[n_releases]);
       }
@@ -1555,6 +1573,7 @@ retry_page_get:
 
       /* x-latch the branch blocks not released yet. */
       for (ulint i = n_releases; i <= n_blocks; i++) {
+        /* BTR_MODIFY_TREE 将可能 SMO 的 Page 都使用 X lock 锁住. */
         mtr_block_x_latch_at_savepoint(mtr, tree_savepoints[i], tree_blocks[i]);
       }
     }
@@ -2806,6 +2825,7 @@ dberr_t btr_cur_optimistic_insert(
   /* Calculate the record size when entry is converted to a record */
   rec_size = rec_get_converted_size(index, entry);
 
+  /* record 的长度超过了空 page 的一半则会采用外部存储的方式. */
   if (page_zip_rec_needs_ext(rec_size, page_is_comp(page),
                              dtuple_get_n_fields(entry), page_size)) {
     /* The record is so big that we have to store some fields
@@ -4006,6 +4026,8 @@ dberr_t btr_cur_pessimistic_update(ulint flags, btr_cur_t *cursor,
   table so condition needs to ensure that table is not intrinsic. */
   if ((flags & BTR_NO_UNDO_LOG_FLAG) && rec_offs_any_extern(*offsets) &&
       !index->table->is_intrinsic()) {
+    /* 进行 BLOB 更新. */
+
     /* We are in a transaction rollback undoing a row
     update: we must free possible externally stored fields
     which got new values in the update, if they are not
@@ -4087,10 +4109,12 @@ dberr_t btr_cur_pessimistic_update(ulint flags, btr_cur_t *cursor,
 #endif /* UNIV_ZIP_DEBUG */
   page_cursor = btr_cur_get_page_cur(cursor);
 
+  /* 物理删除, 不能同时存在两个相等的 record. */
   page_cur_delete_rec(page_cursor, index, *offsets, mtr);
 
   page_cur_move_to_prev(page_cursor);
 
+  /* 进行插入. */
   rec =
       btr_cur_insert_if_possible(cursor, new_entry, offsets, offsets_heap, mtr);
 
@@ -4774,6 +4798,8 @@ ibool btr_cur_pessimistic_delete(dberr_t *err, ibool has_reserved_extents,
 
     /* The following call will restart the btr_mtr, which could change the
     cursor position. */
+
+    /* 调用 free page 的方式释放空间进行 purge.  */
     btr_ctx.free_externally_stored_fields(trx_id, undo_no, rollback, rec_type);
 
     /* The cursor position could have changed now. */
@@ -4841,7 +4867,7 @@ ibool btr_cur_pessimistic_delete(dberr_t *err, ibool has_reserved_extents,
 
   if (level > 0 &&
       UNIV_UNLIKELY(rec == page_rec_get_next(page_get_infimum_rec(page)))) {
-    /*  删除的 record 是 Page 上的第一个, 需要更新父节点的 node ptr. */
+    /* 删除的 record 是 Page 上的第一个, 需要更新父节点的 node ptr. */
     rec_t *next_rec = page_rec_get_next(rec);
 
     if (btr_page_get_prev(page, mtr) == FIL_NULL) {

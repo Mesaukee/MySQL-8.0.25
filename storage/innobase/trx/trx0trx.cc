@@ -963,7 +963,7 @@ static void trx_resurrect(trx_rseg_t *rseg) {
     /* 将事务添加至事务列表. */
     trx_sys_rw_trx_add(trx);
 
-    /* 恢复 table id, 用以在数据字段恢复时重新加锁 srv_dict_recover_on_restart(). */
+    /* 恢复 table id, 用以在数据恢复时重新加锁 srv_dict_recover_on_restart(). */
     trx_resurrect_table_ids(trx, &trx->rsegs.m_redo, undo);
   }
 
@@ -989,7 +989,7 @@ static void trx_resurrect(trx_rseg_t *rseg) {
     /* 将事务添加至事务列表. */
     trx_sys_rw_trx_add(trx);
 
-    /* 恢复 table id, 用以在数据字段恢复时重新加锁 srv_dict_recover_on_restart(). */
+    /* 恢复 table id, 用以在数据恢复时重新加锁 srv_dict_recover_on_restart(). */
     trx_resurrect_table_ids(trx, &trx->rsegs.m_redo, undo);
   }
 }

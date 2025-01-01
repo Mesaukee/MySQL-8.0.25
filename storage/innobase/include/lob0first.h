@@ -192,6 +192,7 @@ struct first_page_t : public basic_page_t {
   flst_node_t *addr2ptr_x(fil_addr_t &addr, mtr_t *mtr) const {
     space_id_t space = dict_index_get_space(m_index);
     const page_size_t page_size = dict_table_page_size(m_index->table);
+
     return (fut_get_ptr(space, page_size, addr, RW_X_LATCH, mtr));
   }
 

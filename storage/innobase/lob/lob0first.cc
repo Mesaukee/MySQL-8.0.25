@@ -237,6 +237,7 @@ buf_block_t *first_page_t::alloc(mtr_t *alloc_mtr, bool is_bulk) {
   set_trx_id(0);
   byte *free_lst = free_list();
   byte *index_lst = index_list();
+
   flst_init(index_lst, m_mtr);
   flst_init(free_lst, m_mtr);
 
@@ -247,11 +248,16 @@ buf_block_t *first_page_t::alloc(mtr_t *alloc_mtr, bool is_bulk) {
     index_entry_t entry(cur, m_mtr, m_index);
     entry.init();
     flst_add_last(free_lst, cur, m_mtr);
+
     cur += index_entry_t::SIZE;
   }
+
   ut_ad(flst_validate(free_lst, m_mtr));
+
   set_next_page_null();
+
   ut_ad(get_page_type() == FIL_PAGE_TYPE_LOB_FIRST);
+
   return (m_block);
 }
 
@@ -263,6 +269,7 @@ FIL_PAGE_TYPE_LOB_INDEX) will be allocated.
 flst_node_t *first_page_t::alloc_index_entry(bool bulk) {
   flst_base_node_t *f_list = free_list();
   fil_addr_t node_addr = flst_get_first(f_list, m_mtr);
+
   if (fil_addr_is_null(node_addr)) {
     node_page_t node_page(m_mtr, m_index);
     buf_block_t *block = node_page.alloc(*this, bulk);
@@ -273,8 +280,10 @@ flst_node_t *first_page_t::alloc_index_entry(bool bulk) {
 
     node_addr = flst_get_first(f_list, m_mtr);
   }
+
   flst_node_t *node = addr2ptr_x(node_addr);
   flst_remove(f_list, node, m_mtr);
+
   return (node);
 }
 

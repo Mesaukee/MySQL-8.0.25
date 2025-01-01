@@ -1086,6 +1086,7 @@ que_thr_t *trx_rollback_step(que_thr_t *thr) /*!< in: query thread */
 
     ut_a(node->undo_thr == nullptr);
 
+    /* 如果传递了 savepoint no, least_undo_no 就是 savepoint no. */
     roll_limit = node->partial ? node->savept.least_undo_no : 0;
 
     trx_commit_or_rollback_prepare(trx);

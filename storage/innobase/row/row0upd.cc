@@ -2254,6 +2254,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
         break;
       case ONLINE_INDEX_CREATION:
         /* Log a DELETE and optionally INSERT. */
+        /* 第 3 个参数是 trx_id, trx_id 为 0 代表是 delete. */
         row_log_online_op(index, entry, 0);
 
         if (!node->is_delete) {
@@ -2261,6 +2262,8 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t
           entry =
               row_build_index_entry(node->upd_row, node->upd_ext, index, heap);
           ut_a(entry);
+
+          /* 第 3 个参数是 trx_id, trx_id 不为 0 代表是 insert. */
           row_log_online_op(index, entry, trx->id);
         }
         /* fall through */
@@ -2820,10 +2823,13 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t row_upd_clust_rec(
   record to update */
 
   if (node->cmpl_info & UPD_NODE_NO_SIZE_CHANGE) {
+    /* 对于 Update 后长度不变的 Record, 调用原地修改, 这里长度不变要求这一行
+     * 所有的 field 均为固定大小 (get_fixed_size). */
     err = btr_cur_update_in_place(flags | BTR_NO_LOCKING_FLAG, btr_cur, offsets,
                                   node->update, node->cmpl_info, thr,
                                   thr_get_trx(thr)->id, mtr);
   } else {
+    /* 尝试乐观更新, 但是 BLOB 字段使用悲观 update. */
     err = btr_cur_optimistic_update(
         flags | BTR_NO_LOCKING_FLAG, btr_cur, &offsets, offsets_heap,
         node->update, node->cmpl_info, thr, thr_get_trx(thr)->id, mtr);
@@ -2872,6 +2878,7 @@ static MY_ATTRIBUTE((warn_unused_result)) dberr_t row_upd_clust_rec(
     heap = mem_heap_create(1024);
   }
 
+  /* 乐观更新失败, 则选择悲观更新. */
   err = btr_cur_pessimistic_update(
       flags | BTR_NO_LOCKING_FLAG | BTR_KEEP_POS_FLAG, btr_cur, &offsets,
       offsets_heap, heap, &big_rec, node->update, node->cmpl_info, thr, trx_id,
