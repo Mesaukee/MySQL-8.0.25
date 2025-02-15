@@ -487,7 +487,7 @@ static bool btr_cur_will_modify_tree(dict_index_t *index, const page_t *page,
       ulint max_nodes_deleted = 0;
 
       /* 如果 B+ tree的层级超过了 7 层,  max_nodes_deleted 设为 64.
-       * 否则  max_nodes_deleted 设置为 2^(level-1). */
+       * 否则 max_nodes_deleted 设置为 2^(level-1). */
 
       /* By modifying tree operations from the under of this level,
       logically (2 ^ (level - 1)) opportunities to deleting records in maximum
@@ -555,6 +555,9 @@ static bool btr_cur_will_modify_tree(dict_index_t *index, const page_t *page,
     for page directory already */
     ulint max_size = page_get_max_insert_size_after_reorganize(page, 2);
 
+    /* max_size 为 page 的剩余空间.
+     * 1. 如果剩余空间小于 BTR_CUR_PAGE_REORGANIZE_LIMIT + rec_size 即需要锁住这个 page.
+     * 2. 如果剩余空间小于 2 * rec_size, 也需要锁住这个 page. */
     if (max_size < BTR_CUR_PAGE_REORGANIZE_LIMIT + rec_size ||
         max_size < rec_size * 2) {
       return (true);

@@ -2489,6 +2489,8 @@ and return. don't execute actual insert. */
   an existing record as the new entry is exactly same as old entry.
   Avoid this check if allow duplicates is enabled. */
   if (!index->allow_duplicates && row_ins_must_modify_rec(cursor)) {
+    /*  插入的时候发现存在相等的 record. */
+
     /* There is already an index entry with a long enough common
     prefix, we must convert the insert into a modify of an
     existing record */

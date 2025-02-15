@@ -2266,6 +2266,7 @@ dberr_t trx_undo_report_row_operation(
     undo_page = buf_block_get_frame(undo_block);
     ut_ad(page_no == undo_block->page.id.page_no());
 
+    /* 将当前的 Record 写入 Undo Log. */
     switch (op_type) {
       case TRX_UNDO_INSERT_OP:
         offset = trx_undo_page_report_insert(undo_page, trx, index, clust_entry,
@@ -2324,8 +2325,10 @@ dberr_t trx_undo_report_row_operation(
       /* undo->top_page_no 记录最新的 undo record 的 page no. */
       undo->top_page_no = page_no;
       undo->top_offset = offset;
+      /* 更新 top_undo_no. */
       undo->top_undo_no = trx->undo_no;
 
+      /* 更新 trx 的 undo no. */
       trx->undo_no++;
       trx->undo_rseg_space = undo_ptr->rseg->space_id;
 

@@ -2381,7 +2381,7 @@ func_start:
 
   /* try to insert to the next page if possible before split */
 
-  /* 直接尝试插入到下一个 Page. */
+  /* 直接尝试插入到下一个 Page, 剩余空间不满足会失败. */
   rec =
       btr_insert_into_right_sibling(flags, cursor, offsets, *heap, tuple, mtr);
 
@@ -2396,6 +2396,10 @@ func_start:
   half-page */
   insert_left = FALSE;
 
+  /* 1. 首先选择右边的 page 进行分裂.
+   * 2. 其次选择左边的 page 进行分裂.
+   * 3. 否则进行中间分裂.
+   * 4. 分裂后仍然无法 fit, 需要继续分裂. */
   if (n_iterations > 0) {
     direction = FSP_UP;
     hint_page_no = page_no + 1;
@@ -2455,6 +2459,7 @@ func_start:
     *offsets =
         rec_get_offsets(split_rec, cursor->index, *offsets, n_uniq, heap);
 
+    /* 插在分裂点的左边. */
     insert_left = cmp_dtuple_rec(tuple, split_rec, cursor->index, *offsets) < 0;
 
     if (!insert_left && new_page_zip && n_iterations > 0) {
@@ -2648,14 +2653,17 @@ func_start:
   attempted this already. */
 
   if (page_cur_get_page_zip(page_cursor) ||
+      /* 重新把 records 整理插入一遍. */
       !btr_page_reorganize(page_cursor, cursor->index, mtr)) {
     goto insert_failed;
   }
 
+  /* 再次插入一次. */
   rec = page_cur_tuple_insert(page_cursor, tuple, cursor->index, offsets, heap,
                               mtr);
 
   if (rec == nullptr) {
+    /*  插入仍然失败, 需要继续分裂. */
     /* The insert did not fit on the page: loop back to the
     start of the function for a new split */
   insert_failed:
