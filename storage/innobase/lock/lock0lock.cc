@@ -1671,6 +1671,7 @@ static dberr_t lock_rec_lock_slow(bool impl, select_mode sel_mode, ulint mode,
     ut_ad(!impl);
 
     lock_reuse_for_next_key_lock(held_lock, mode, block, heap_no, index, trx);
+
     return (DB_SUCCESS);
   }
 
@@ -1701,6 +1702,7 @@ static dberr_t lock_rec_lock_slow(bool impl, select_mode sel_mode, ulint mode,
         return (err);
     }
   }
+
   if (!impl) {
     /* Set the requested lock on the record. */
 
@@ -1708,6 +1710,7 @@ static dberr_t lock_rec_lock_slow(bool impl, select_mode sel_mode, ulint mode,
 
     return (DB_SUCCESS_LOCKED_REC);
   }
+
   return (DB_SUCCESS);
 }
 
@@ -5337,6 +5340,7 @@ dberr_t lock_rec_insert_check_and_lock(
   lock_t *lock;
   ibool inherit_in = *inherit;
   trx_t *trx = thr_get_trx(thr);
+  /* 查看下一条 record. */
   const rec_t *next_rec = page_rec_get_next_const(rec);
   ulint heap_no = page_rec_get_heap_no(next_rec);
 
@@ -5372,10 +5376,11 @@ dberr_t lock_rec_insert_check_and_lock(
       had to wait for their insert. Both had waiting gap type lock requests
       on the successor, which produced an unnecessary deadlock. */
 
-      /* 插入意向锁. */
+      /* 使用插入意向锁. */
       const ulint type_mode = LOCK_X | LOCK_GAP | LOCK_INSERT_INTENTION;
 
-      /* 判断是否锁住了这个 GAP. */
+      /* [prev record]  [待插入的 record] [next record]
+       * 判断 [prev record] 和 [next record] 这个 GAP 区间是否已经被锁住了. */
       const lock_t *wait_for =
           lock_rec_other_has_conflicting(type_mode, block, heap_no, trx);
 

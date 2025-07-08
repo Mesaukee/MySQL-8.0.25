@@ -4837,6 +4837,7 @@ buf_page_t *buf_page_init_for_read(dberr_t *err, ulint mode,
 
     rw_lock_x_unlock(hash_lock);
 
+    /* 释放 Page 的 mutex. */
     buf_page_mutex_exit(block);
   } else {
     /* Initialize the buf_pool pointer. */
